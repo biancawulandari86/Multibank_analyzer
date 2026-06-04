@@ -1976,21 +1976,17 @@ var _renderSidebarBusy = false; // guard rekursi renderSidebar
               }
               loaded++;
               if (loaded === total) {
-                // Opsi B: catatan sudah dibaca dari kolom G saat loadBankFromSheets.
-                // Tidak perlu loadNotesFromSheets() dari _Catatan lagi.
                 showSyncIndicator('success', '✓ Data dimuat dari server');
                 _finishInit();
               }
-            })
-            .withFailureHandler(function() {
+            }, function() {
               loaded++;
               if (loaded === total) {
                 notes = {};
                 showSyncIndicator('warn', '⚠ Sebagian data gagal dimuat');
                 _finishInit();
               }
-            })
-            .loadBankFromSheets(meta.name, meta.group);
+            });
         });
       }, function(err) {
         banks = {}; groups = {}; notes = {};
