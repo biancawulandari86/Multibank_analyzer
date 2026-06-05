@@ -671,7 +671,7 @@ body.mode-hp .nav-badge { display: none; }
 body.mode-hp #btn-load-gsheet { display: none !important; }
 body.mode-hp #nav-theme-dark,
 body.mode-hp #nav-theme-light { display: none; }
-body.mode-hp .btn-switch-device { display: none; }
+/* btn-switch-device tampil di semua mode */
 
 /* ── HP: App Layout ── */
 body.mode-hp .app-layout {
@@ -1294,6 +1294,9 @@ function gasCall(funcName, args, onSuccess, onFailure) {
     Ingat pilihan saya (bisa diubah lagi nanti)
   </label>
   <div class="device-footer-link" onclick="selectDevice('laptop')">Lewati, lanjutkan →</div>
+  <div id="device-back-btn" style="display:none;margin-top:8px">
+    <div class="device-footer-link" style="color:var(--muted)" onclick="closeDeviceSelect()">← Kembali ke aplikasi</div>
+  </div>
 </div>
 
 <!-- SIDEBAR OVERLAY untuk mode HP -->
@@ -1321,6 +1324,10 @@ function gasCall(funcName, args, onSuccess, onFailure) {
     <span class="hp-nav-icon">☰</span>
     <span class="hp-nav-label">Menu</span>
   </button>
+  <button class="hp-nav-item" onclick="showDeviceSelect()" title="Ganti Tampilan">
+    <span class="hp-nav-icon">💻</span>
+    <span class="hp-nav-label">Tampilan</span>
+  </button>
 </div>
 
 
@@ -1344,7 +1351,7 @@ function gasCall(funcName, args, onSuccess, onFailure) {
     <span id="nav-live-badge" style="display:none;font-size:11px;padding:3px 10px;border-radius:20px;background:rgba(34,211,160,0.12);color:var(--green);font-weight:600;letter-spacing:0.3px;border:1px solid rgba(34,211,160,0.2);" title="Auto-sync aktif — data diperbarui otomatis setiap 15 detik">
       <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green);margin-right:4px;vertical-align:middle;animation:pulseLive 2s ease-in-out infinite"></span>LIVE
     </span>
-    <button class="btn-switch-device" onclick="showDeviceSelect()" title="Ganti tampilan">📱/💻</button>
+    <button class="btn-switch-device" onclick="showDeviceSelect()" title="Ganti tampilan HP/Laptop">📱</button>
     <!-- TEMA TOGGLE NAVBAR -->
     <button type="button" class="theme-toggle-btn active" id="nav-theme-dark" onclick="setUserTheme('dark')" title="Tema Gelap">🌙</button>
     <button type="button" class="theme-toggle-btn" id="nav-theme-light" onclick="setUserTheme('light')" title="Tema Terang">☀️</button>
@@ -1834,6 +1841,14 @@ function selectDevice(mode) {
   }
 }
 
+function closeDeviceSelect() {
+  // Kembali ke app tanpa mengubah mode — restore mode dari localStorage/session
+  var saved = '';
+  try { saved = localStorage.getItem('deviceMode') || sessionStorage.getItem('deviceMode') || ''; } catch(e) {}
+  if (saved) applyDeviceMode(saved);
+  document.getElementById('device-select-screen').style.display = 'none';
+}
+
 function applyDeviceMode(mode) {
   if (mode === 'hp') {
     document.body.classList.add('mode-hp');
@@ -1845,13 +1860,16 @@ function applyDeviceMode(mode) {
 }
 
 function showDeviceSelect() {
-  try { localStorage.removeItem('deviceMode'); } catch(e) {}
-  try { sessionStorage.removeItem('deviceMode'); } catch(e) {}
+  // Jangan hapus localStorage saat user sudah login — hanya reset class body
+  // agar screen pilihan bisa tampil tanpa kehilangan preferensi sebelumnya
   document.body.classList.remove('mode-hp', 'mode-laptop');
   closeSidebar();
   // Sembunyikan login screen sementara (jika sedang tampil)
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('device-select-screen').style.display = 'flex';
+  // Jika sudah login, tampilkan tombol kembali ke app
+  var backBtn = document.getElementById('device-back-btn');
+  if (backBtn) backBtn.style.display = currentUser ? 'block' : 'none';
 }
 
 function toggleSidebar() {
@@ -2848,18 +2866,25 @@ function applyUpload(csvData) {
     var existing = b.mutasi.transactions;
     var incoming = csvData.transactions || [];
 
-    // Buat set key dari transaksi lama untuk deduplikasi
-    var existingKeys = {};
+    // Buat counter key dari transaksi lama untuk deduplikasi.
+    // Pakai counter (bukan boolean) agar transaksi kembar yang MEMANG ada 2
+    // (misal: TARIKAN ATM di tanggal sama, nominal sama) tetap bisa masuk
+    // selama jumlahnya di incoming tidak melebihi jumlah di existing.
+    var existingKeyCount = {};
     existing.forEach(function(t) {
       var k = t.date + '|' + String(t.desc||'').slice(0,60) + '|' + Math.round(t.debit||0) + '|' + Math.round(t.credit||0);
-      existingKeys[k] = true;
+      existingKeyCount[k] = (existingKeyCount[k] || 0) + 1;
     });
 
-    // Tambahkan hanya transaksi baru yang belum ada
+    // Tambahkan hanya transaksi baru yang belum ada (atau melebihi jumlah di existing)
+    var incomingKeyCount = {};
     var added = 0;
     incoming.forEach(function(t) {
       var k = t.date + '|' + String(t.desc||'').slice(0,60) + '|' + Math.round(t.debit||0) + '|' + Math.round(t.credit||0);
-      if (!existingKeys[k]) {
+      incomingKeyCount[k] = (incomingKeyCount[k] || 0) + 1;
+      // Tambahkan jika jumlah kemunculan di incoming belum melebihi jumlah di existing
+      var existCount = existingKeyCount[k] || 0;
+      if (incomingKeyCount[k] > existCount) {
         existing.push(t);
         added++;
       }
@@ -4000,24 +4025,46 @@ function _continueConfirmUpload() {
     applyUpload(pendingCSVData);
     return;
   }
-  // Detect duplicates
+  // Detect duplicates — pakai counter agar transaksi kembar yang memang ada 2
+  // (desc+nominal sama) tidak dianggap duplikat secara berlebihan.
   var existing = b.mutasi.transactions;
   var incoming = pendingCSVData.transactions;
+
+  // Bangun counter dari existing: berapa kali tiap kombinasi desc+debit+credit muncul
+  var existMatchCount = {};
+  existing.forEach(function(e) {
+    var k = String(e.desc||'') + '|' + Math.round(e.debit) + '|' + Math.round(e.credit);
+    existMatchCount[k] = (existMatchCount[k] || 0) + 1;
+  });
+
+  // Untuk setiap transaksi incoming, cek apakah sudah "terpakai" di existing
+  var usedExistCount = {};
   var dupItems = [];
   incoming.forEach(function(t, inIdx) {
-    var matched = existing.findIndex(function(e) {
-      return e.desc === t.desc &&
-             Math.round(e.debit) === Math.round(t.debit) &&
-             Math.round(e.credit) === Math.round(t.credit) &&
-             (t.balance === 0 || e.balance === 0 || Math.round(e.balance) === Math.round(t.balance));
-    });
-    if (matched !== -1) {
-      dupItems.push({
-        inIdx: inIdx, existIdx: matched, desc: t.desc,
-        debit: t.debit, credit: t.credit,
-        newDate: t.date, existDate: existing[matched].date,
-        chosenDate: existing[matched].date
-      });
+    var k = String(t.desc||'') + '|' + Math.round(t.debit) + '|' + Math.round(t.credit);
+    usedExistCount[k] = (usedExistCount[k] || 0) + 1;
+    // Dianggap duplikat hanya jika kemunculan ke-N di incoming <= jumlah di existing
+    if (usedExistCount[k] <= (existMatchCount[k] || 0)) {
+      // Cari match ke-N di existing (skip yang sudah dipakai sebelumnya)
+      var matchCount = 0;
+      var matchIdx = -1;
+      for (var ei = 0; ei < existing.length; ei++) {
+        var e = existing[ei];
+        if (String(e.desc||'') === String(t.desc||'') &&
+            Math.round(e.debit) === Math.round(t.debit) &&
+            Math.round(e.credit) === Math.round(t.credit)) {
+          matchCount++;
+          if (matchCount === usedExistCount[k]) { matchIdx = ei; break; }
+        }
+      }
+      if (matchIdx !== -1) {
+        dupItems.push({
+          inIdx: inIdx, existIdx: matchIdx, desc: t.desc,
+          debit: t.debit, credit: t.credit,
+          newDate: t.date, existDate: existing[matchIdx].date,
+          chosenDate: existing[matchIdx].date
+        });
+      }
     }
   });
   if (!dupItems.length) {
