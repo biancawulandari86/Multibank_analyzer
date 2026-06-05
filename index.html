@@ -2808,28 +2808,48 @@ function confirmUpload() {
     return;
   }
 
-  // Detect duplicates: match by desc + debit + kredit
+  // Detect duplicates: match by desc + debit + kredit + balance (saldo).
+  // v4.3: Pakai "pool" — setiap transaksi existing hanya bisa di-match SATU KALI.
+  // Ini mencegah dua transfer 4jt berurutan (saldo berbeda) dianggap duplikat
+  // karena transaksi existing pertama tidak bisa dipakai lagi untuk match kedua.
   var existing = b.mutasi.transactions;
   var incoming = pendingCSVData.transactions;
-  var dupItems = []; // { inIdx, existingIdx, newDate, origDate, existDate }
+  var dupItems = [];
+
+  // Buat pool index existing yang tersedia (belum dipakai untuk match)
+  var availableExistIdx = existing.map(function(_, i) { return i; });
 
   incoming.forEach(function(t, inIdx) {
-    var matched = existing.findIndex(function(e) {
-      return e.desc === t.desc &&
-             Math.round(e.debit) === Math.round(t.debit) &&
-             Math.round(e.credit) === Math.round(t.credit) &&
-             (t.balance === 0 || e.balance === 0 || Math.round(e.balance) === Math.round(t.balance));
-    });
-    if (matched !== -1) {
+    // Cari di pool: match desc + debit + kredit + saldo (jika saldo tersedia)
+    var foundPoolPos = -1;
+    for (var pi = 0; pi < availableExistIdx.length; pi++) {
+      var ei = availableExistIdx[pi];
+      var e = existing[ei];
+      var descMatch   = e.desc === t.desc;
+      var debitMatch  = Math.round(e.debit) === Math.round(t.debit);
+      var creditMatch = Math.round(e.credit) === Math.round(t.credit);
+      // Saldo harus cocok jika keduanya tersedia — ini yang membedakan dua transfer 4jt
+      var balanceMatch = (t.balance > 0 && e.balance > 0)
+        ? Math.round(e.balance) === Math.round(t.balance)
+        : true; // salah satu tidak punya saldo, abaikan cek saldo
+      if (descMatch && debitMatch && creditMatch && balanceMatch) {
+        foundPoolPos = pi;
+        break;
+      }
+    }
+    if (foundPoolPos !== -1) {
+      var matchedExistIdx = availableExistIdx[foundPoolPos];
+      // Hapus dari pool agar tidak bisa dipakai lagi oleh transaksi incoming berikutnya
+      availableExistIdx.splice(foundPoolPos, 1);
       dupItems.push({
         inIdx: inIdx,
-        existIdx: matched,
+        existIdx: matchedExistIdx,
         desc: t.desc,
         debit: t.debit,
         credit: t.credit,
-        newDate: t.date,        // tanggal dari CSV baru
-        existDate: existing[matched].date, // tanggal yang sudah ada
-        chosenDate: existing[matched].date // default: pakai tanggal lama
+        newDate: t.date,
+        existDate: existing[matchedExistIdx].date,
+        chosenDate: existing[matchedExistIdx].date
       });
     }
   });
