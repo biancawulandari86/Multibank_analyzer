@@ -4076,6 +4076,9 @@ function deleteNote() {
   _syncNoteToSheet(nk, '');
 }
 
+// Flag: jumlah request updateNoteInSheet yang sedang dalam proses
+var _notesPendingSave = 0;
+
 // Sync satu catatan langsung ke kolom G sheet transaksi
 function _syncNoteToSheet(nk, noteText) {
   var isGAS2 = true; // GAS Bridge active
@@ -4111,7 +4114,13 @@ function _syncNoteToSheet(nk, noteText) {
   // Kirim juga txnId (format bankId|id|txnId) agar server bisa cocokkan via kolom ImportId
   var txnIdForServer = (parts[1] === 'id') ? parts[2] : '';
 
-  gasCall('updateNoteInSheet', [b.name, b.group, txnDate, txnDesc, txnDebit, txnCredit, noteText, noteBy, noteAt, txnIdForServer], function() {}, function() {});
+  // Tandai bahwa ada catatan yang sedang disimpan ke server
+  _notesPendingSave++;
+  gasCall('updateNoteInSheet', [b.name, b.group, txnDate, txnDesc, txnDebit, txnCredit, noteText, noteBy, noteAt, txnIdForServer], function() {
+    _notesPendingSave = Math.max(0, _notesPendingSave - 1);
+  }, function() {
+    _notesPendingSave = Math.max(0, _notesPendingSave - 1);
+  });
 }
 
 // Catatan sudah disimpan langsung ke kolom G sheet Transaksi via _syncNoteToSheet.
@@ -5351,17 +5360,23 @@ function _autoLoadBankFromGSheet(meta) {
 function _autoReloadBankFromGSheet(meta, bankId) {
   var isGAS2 = true; // GAS Bridge active
   if (!isGAS2) return;
+  // Jika ada catatan yang sedang disimpan ke server, tunda reload ini
+  // agar catatan lokal yang belum selesai tersimpan tidak tertimpa
+  if (_notesPendingSave > 0) {
+    setTimeout(function() { _autoReloadBankFromGSheet(meta, bankId); }, 3000);
+    return;
+  }
   gasCall('loadBankFromSheets', [meta.name, meta.group], function(res) {
       if (!res || res.error) return;
       banks[bankId].mutasi = res;
       banks[bankId].saldo  = res.summary.lastBalance || meta.saldo;
-      // Merge catatan dari kolom G — hapus catatan lama bank ini dulu, ganti dengan yang dari server
-      Object.keys(notes).forEach(function(k) {
-        if (k.indexOf(bankId + '|') === 0) { delete notes[k]; delete notesMeta[k]; }
-      });
+      // Merge catatan dari kolom G — JANGAN hapus catatan lokal dulu.
+      // Catatan lokal yang belum tersimpan ke server (misalnya baru saja diisi)
+      // akan tetap dipertahankan. Server hanya menambah/update yang sudah ada di GSheet.
       (res.transactions || []).forEach(function(t) {
         if (t.note) {
           var nk = noteKey(bankId, t.date, t.desc, t.debit, t.credit, t.txnId);
+          // Hanya overwrite jika server punya catatan (tidak menghapus catatan lokal yg belum tersimpan)
           notes[nk] = t.note;
           if (t.noteBy || t.noteAt) notesMeta[nk] = { by: t.noteBy || '', at: t.noteAt || '' };
         }
@@ -5439,8 +5454,7 @@ function _showSyncDot(active) {
     </div>
   </div>
 </div>
-
-
+  
 <div style="position:fixed;bottom:12px;left:16px;z-index:9999;font-size:11px;color:var(--muted2);font-family:var(--sans);pointer-events:none;letter-spacing:0.3px;">Developer by Bianca</div>
 </body>
 </html>
