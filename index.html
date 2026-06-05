@@ -1049,7 +1049,7 @@ body.mode-hp #btn-hamburger { display: flex !important; }
      ============================================================ -->
 <script>
 // ── KONFIGURASI — isi URL GAS Web App kamu di sini ──
-var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbxHztrB5gKKtESGcG4ZTzzYUK8dMg-pC47EhNotQsDMz9cg4GzT8D0KYE0SjjxC6D2k/exec';
+var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbyJPwOagx5QmJR3dAmxxzAMzttLHIgZbSsdLZzx2e_NfgcWzbHI9aBAOl8iHiCGIzkG/exec';
 
 // ── Bridge: gasCall(funcName, args, onSuccess, onFailure) ──
 // Meniru perilaku gasCall('funcName', [], , function(e){ console.error(e); })
@@ -4078,6 +4078,9 @@ function deleteNote() {
 
 // Flag: jumlah request updateNoteInSheet yang sedang dalam proses
 var _notesPendingSave = 0;
+// Flag: jumlah request saveToSheets yang sedang dalam proses (import/save bank)
+// Saat > 0, polling auto-sync TIDAK boleh trigger reload agar data baru tidak ditimpa
+var _savingInProgress = 0;
 
 // Sync satu catatan langsung ke kolom G sheet transaksi
 function _syncNoteToSheet(nk, noteText) {
@@ -4136,6 +4139,12 @@ function _autoSaveBankToSheet(bankId) {
   var b = banks[bankId];
   if (!b || !b.mutasi || !b.mutasi.success) return;
 
+  // Tandai bahwa sedang ada proses simpan — polling tidak boleh reload selama ini
+  _savingInProgress++;
+  // Optimistic: set _lastKnownTs ke sentinel agar polling tidak salah trigger
+  // bahkan jika GAS lambat dan polling keburu jalan sebelum save selesai
+  _lastKnownTs = '__saving__' + Date.now();
+
   // Sertakan catatan ke dalam transaksi
   var mutasiWithNotes = JSON.parse(JSON.stringify(b.mutasi));
   mutasiWithNotes.transactions.forEach(function(t) {
@@ -4147,13 +4156,16 @@ function _autoSaveBankToSheet(bankId) {
   });
 
   gasCall('saveToSheets', [mutasiWithNotes, b.name, b.group, b.saldo, b.color], function(res) {
+      _savingInProgress = Math.max(0, _savingInProgress - 1);
       if (res && res.success) {
-        // Update timestamp lokal agar tidak trigger notif sendiri
+        // Update timestamp lokal agar polling tahu ini perubahan dari diri sendiri
         gasCall('getLastSavedTimestamp', [], function(tsRes) {
           if (tsRes && tsRes.ts) _lastKnownTs = tsRes.ts;
         }, function(){});
       }
-    }, function() {});
+    }, function() {
+      _savingInProgress = Math.max(0, _savingInProgress - 1);
+    });
 }
 
 // ============================================================
@@ -4276,6 +4288,10 @@ function doSaveToGSheet() {
   document.getElementById('btn-do-save-gsheet').disabled = true;
   document.getElementById('btn-do-save-gsheet').textContent = '⏳ Menyimpan...';
 
+  // Tandai sedang menyimpan agar polling tidak reload dan menimpa data
+  _savingInProgress++;
+  _lastKnownTs = '__saving__' + Date.now();
+
   // Sertakan catatan (notes) ke dalam setiap transaksi sebelum dikirim ke GSheet
   var mutasiWithNotes = JSON.parse(JSON.stringify(b.mutasi)); // deep copy
   mutasiWithNotes.transactions.forEach(function(t) {
@@ -4287,6 +4303,7 @@ function doSaveToGSheet() {
   });
 
   gasCall('saveToSheets', [mutasiWithNotes, b.name, b.group, b.saldo, b.color], function(res) {
+      _savingInProgress = Math.max(0, _savingInProgress - 1);
       if (res.error) {
         showGSheetSaveStatus('error', '✗ Error: ' + res.error);
         document.getElementById('btn-do-save-gsheet').disabled = false;
@@ -4294,13 +4311,13 @@ function doSaveToGSheet() {
       } else {
         showGSheetSaveStatus('success', '✓ Berhasil disimpan! <a href="' + res.url + '" target="_blank" style="color:var(--accent)">Buka Google Sheets ↗</a>');
         document.getElementById('btn-do-save-gsheet').textContent = '✓ Tersimpan';
-        // Catatan sudah tersimpan di kolom G masing-masing sheet Transaksi (Opsi B)
-        // Update timestamp lokal agar tidak trigger notifikasi perubahan sendiri
+        // Update timestamp lokal agar polling tahu ini perubahan dari diri sendiri
         gasCall('getLastSavedTimestamp', [], function(tsRes) {
           if (tsRes && tsRes.ts) _lastKnownTs = tsRes.ts;
         }, function(){});
       }
     }, function(err) {
+      _savingInProgress = Math.max(0, _savingInProgress - 1);
       showGSheetSaveStatus('error', '✗ Gagal: ' + err.message);
       document.getElementById('btn-do-save-gsheet').disabled = false;
       document.getElementById('btn-do-save-gsheet').textContent = '💾 Simpan Sekarang';
@@ -5236,15 +5253,27 @@ function _onRemoteNotesChanged() {
 function _checkForUpdates() {
   var isGAS2 = true; // GAS Bridge active
   if (!isGAS2 || _syncBusy) return;
+  // Jika sedang dalam proses simpan (import/save), skip polling kali ini
+  // agar data yang baru diimport tidak ditimpa oleh reload dari GSheet
+  if (_savingInProgress > 0) return;
+
   _syncBusy = true;
 
   gasCall('getLastSavedTimestamp', [], function(res) {
       _syncBusy = false;
       if (!res || res.error || !res.ts) return;
+      // Jika sempat masuk ke saving state saat request sedang berjalan, abaikan hasilnya
+      if (_savingInProgress > 0) return;
       var newTs = res.ts;
 
       if (_lastKnownTs === null) {
         // Inisialisasi pertama kali
+        _lastKnownTs = newTs;
+        return;
+      }
+
+      // Abaikan jika _lastKnownTs adalah sentinel (sedang/baru saja simpan)
+      if (typeof _lastKnownTs === 'string' && _lastKnownTs.indexOf('__saving__') === 0) {
         _lastKnownTs = newTs;
         return;
       }
@@ -5346,8 +5375,10 @@ function _autoLoadBankFromGSheet(meta) {
       (res.transactions || []).forEach(function(t) {
         if (t.note) {
           var nk = noteKey(bankId, t.date, t.desc, t.debit, t.credit, t.txnId);
-          notes[nk] = t.note;
-          if (t.noteBy || t.noteAt) notesMeta[nk] = { by: t.noteBy || '', at: t.noteAt || '' };
+          if (!notes[nk] || !notes[nk].trim()) {
+            notes[nk] = t.note;
+            if (t.noteBy || t.noteAt) notesMeta[nk] = { by: t.noteBy || '', at: t.noteAt || '' };
+          }
         }
       });
       save();
@@ -5374,11 +5405,24 @@ function _autoReloadBankFromGSheet(meta, bankId) {
       // Catatan lokal yang belum tersimpan ke server (misalnya baru saja diisi)
       // akan tetap dipertahankan. Server hanya menambah/update yang sudah ada di GSheet.
       (res.transactions || []).forEach(function(t) {
+        var nk = noteKey(bankId, t.date, t.desc, t.debit, t.credit, t.txnId);
+        // FIX: Cek juga apakah ada catatan lama dengan key format gs_ (dari versi sebelumnya)
+        // txnId sekarang adalah importId (stabil), tapi mungkin ada catatan lama pakai gs_
+        if (!notes[nk] || !notes[nk].trim()) {
+          // Cari catatan lama dengan key alternatif (fallback format lama: date|desc|debit|credit)
+          var nkFallback = bankId + '|' + t.date + '|' + (t.desc||'').slice(0,40) + '|' + Math.round(t.debit||0) + '|' + Math.round(t.credit||0);
+          if (notes[nkFallback] && notes[nkFallback].trim()) {
+            // Migrasi catatan lama ke key baru
+            notes[nk] = notes[nkFallback];
+            if (notesMeta[nkFallback]) notesMeta[nk] = notesMeta[nkFallback];
+          }
+        }
         if (t.note) {
-          var nk = noteKey(bankId, t.date, t.desc, t.debit, t.credit, t.txnId);
           // Hanya overwrite jika server punya catatan (tidak menghapus catatan lokal yg belum tersimpan)
-          notes[nk] = t.note;
-          if (t.noteBy || t.noteAt) notesMeta[nk] = { by: t.noteBy || '', at: t.noteAt || '' };
+          if (!notes[nk] || !notes[nk].trim()) {
+            notes[nk] = t.note;
+            if (t.noteBy || t.noteAt) notesMeta[nk] = { by: t.noteBy || '', at: t.noteAt || '' };
+          }
         }
       });
       save();
@@ -5457,4 +5501,4 @@ function _showSyncDot(active) {
   
 <div style="position:fixed;bottom:12px;left:16px;z-index:9999;font-size:11px;color:var(--muted2);font-family:var(--sans);pointer-events:none;letter-spacing:0.3px;">Developer by Bianca</div>
 </body>
-</html>
+</html> 
