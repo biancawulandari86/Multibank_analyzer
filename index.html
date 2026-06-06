@@ -2922,15 +2922,12 @@ function applyUpload(csvData) {
     var incoming = csvData.transactions || [];
 
     // Buat counter key dari transaksi lama untuk deduplikasi.
-    // v4.3: Key menyertakan saldo (balance) agar dua transaksi dengan desc+nominal
-    // yang sama tapi saldo berbeda (misal: transfer 4jt dua kali berturut-turut)
-    // TIDAK dianggap duplikat — karena selisih saldo membuktikan itu dua transaksi nyata.
-    // Jika saldo tidak tersedia (0), fallback ke counter seperti sebelumnya.
+    // FIX v4.4: Key TIDAK menyertakan saldo agar transaksi identik (tgl+desc+nominal sama)
+    // yang muncul lebih dari sekali dalam satu hari (misal: 3x biaya TXN 2500) semuanya
+    // masuk. Occurrence counter yang menentukan apakah kemunculan ke-N sudah ada di existing.
     var existingKeyCount = {};
     existing.forEach(function(t) {
-      // Key utama: sertakan saldo jika ada (deteksi via selisih saldo)
-      var balPart = t.balance > 0 ? '|' + Math.round(t.balance) : '';
-      var k = t.date + '|' + String(t.desc||'').slice(0,60) + '|' + Math.round(t.debit||0) + '|' + Math.round(t.credit||0) + balPart;
+      var k = t.date + '|' + String(t.desc||'').slice(0,60) + '|' + Math.round(t.debit||0) + '|' + Math.round(t.credit||0);
       existingKeyCount[k] = (existingKeyCount[k] || 0) + 1;
     });
 
@@ -2938,11 +2935,9 @@ function applyUpload(csvData) {
     var incomingKeyCount = {};
     var added = 0;
     incoming.forEach(function(t) {
-      var balPart = t.balance > 0 ? '|' + Math.round(t.balance) : '';
-      var k = t.date + '|' + String(t.desc||'').slice(0,60) + '|' + Math.round(t.debit||0) + '|' + Math.round(t.credit||0) + balPart;
+      var k = t.date + '|' + String(t.desc||'').slice(0,60) + '|' + Math.round(t.debit||0) + '|' + Math.round(t.credit||0);
       incomingKeyCount[k] = (incomingKeyCount[k] || 0) + 1;
-      // Tambahkan jika kombinasi (desc+nominal+saldo) belum ada di existing,
-      // atau jika jumlah kemunculan di incoming melebihi jumlah di existing
+      // Tambahkan jika kemunculan ke-N di incoming melebihi jumlah di existing
       var existCount = existingKeyCount[k] || 0;
       if (incomingKeyCount[k] > existCount) {
         existing.push(t);
@@ -4091,11 +4086,12 @@ function _continueConfirmUpload() {
   var existing = b.mutasi.transactions;
   var incoming = pendingCSVData.transactions;
 
-  // Bangun counter dari existing: berapa kali tiap kombinasi desc+debit+credit+balance muncul
+  // Bangun counter dari existing: berapa kali tiap kombinasi date+desc+debit+credit muncul
+  // FIX v4.4: Tidak menyertakan saldo dalam key agar transaksi identik di hari yang sama
+  // (misal: 3x BIAYA TXN 2500) tidak saling dianggap duplikat hanya karena saldonya beda.
   var existMatchCount = {};
   existing.forEach(function(e) {
-    var balPart = e.balance > 0 ? '|' + Math.round(e.balance) : '';
-    var k = String(e.desc||'') + '|' + Math.round(e.debit) + '|' + Math.round(e.credit) + balPart;
+    var k = e.date + '|' + String(e.desc||'').slice(0,60) + '|' + Math.round(e.debit||0) + '|' + Math.round(e.credit||0);
     existMatchCount[k] = (existMatchCount[k] || 0) + 1;
   });
 
@@ -4103,8 +4099,7 @@ function _continueConfirmUpload() {
   var usedExistCount = {};
   var dupItems = [];
   incoming.forEach(function(t, inIdx) {
-    var balPart = t.balance > 0 ? '|' + Math.round(t.balance) : '';
-    var k = String(t.desc||'') + '|' + Math.round(t.debit) + '|' + Math.round(t.credit) + balPart;
+    var k = t.date + '|' + String(t.desc||'').slice(0,60) + '|' + Math.round(t.debit||0) + '|' + Math.round(t.credit||0);
     usedExistCount[k] = (usedExistCount[k] || 0) + 1;
     // Dianggap duplikat hanya jika kemunculan ke-N di incoming <= jumlah di existing
     if (usedExistCount[k] <= (existMatchCount[k] || 0)) {
@@ -4113,11 +4108,10 @@ function _continueConfirmUpload() {
       var matchIdx = -1;
       for (var ei = 0; ei < existing.length; ei++) {
         var e = existing[ei];
-        var eBalPart = e.balance > 0 ? '|' + Math.round(e.balance) : '';
-        if (String(e.desc||'') === String(t.desc||'') &&
-            Math.round(e.debit) === Math.round(t.debit) &&
-            Math.round(e.credit) === Math.round(t.credit) &&
-            eBalPart === balPart) {
+        if (e.date === t.date &&
+            String(e.desc||'').slice(0,60) === String(t.desc||'').slice(0,60) &&
+            Math.round(e.debit||0) === Math.round(t.debit||0) &&
+            Math.round(e.credit||0) === Math.round(t.credit||0)) {
           matchCount++;
           if (matchCount === usedExistCount[k]) { matchIdx = ei; break; }
         }
