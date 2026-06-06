@@ -1894,17 +1894,21 @@ function closeSidebar() {
 // Cek apakah sudah pernah pilih device sebelumnya
 (function checkDeviceMode() {
   var saved = null;
-  // Coba localStorage (browser biasa)
   try { saved = localStorage.getItem('deviceMode'); } catch(e) {}
-  // Fallback: coba sessionStorage
   if (!saved) { try { saved = sessionStorage.getItem('deviceMode'); } catch(e) {} }
 
   if (saved === 'hp' || saved === 'laptop') {
-    // Sudah pernah pilih — langsung apply, login screen tetap tampil normal
     applyDeviceMode(saved);
     document.getElementById('device-select-screen').style.display = 'none';
+    // Kalau ada session tersimpan, sembunyikan login screen langsung dari awal
+    // agar tidak ada flash login screen 2 detik saat reload
+    var hasSession = false;
+    try { hasSession = !!sessionStorage.getItem('mba_session_v1') || !!localStorage.getItem('mba_session_v1'); } catch(e) {}
+    if (hasSession) {
+      document.getElementById('login-screen').style.display = 'none';
+    }
   } else {
-    // Belum pernah pilih — sembunyikan login screen, tampilkan screen pilih device dulu
+    // Belum pernah pilih device — sembunyikan login screen, tampilkan screen pilih device dulu
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('device-select-screen').style.display = 'flex';
   }
