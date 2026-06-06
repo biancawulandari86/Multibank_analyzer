@@ -1049,7 +1049,7 @@ body.mode-hp #btn-hamburger { display: flex !important; }
      ============================================================ -->
 <script>
 // ── KONFIGURASI — isi URL GAS Web App kamu di sini ──
-var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbym15DlDxdMwhcD7PRoDgQehQi7ojC23n3qZkbvVJHZPB1jjJ6NiBua_NwPz9mPsbzW/exec';
+var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbzUP-KdBnscHcYUsq882PBembc_TgS92_GNslvNsBWMuj9fx6mCA2TyLOyBn39pL7LD/exec';
 
 // ── Bridge: gasCall(funcName, args, onSuccess, onFailure) ──
 // Meniru perilaku gasCall('funcName', [], , function(e){ console.error(e); })
@@ -2025,7 +2025,37 @@ function _finishInit() {
     try { rebuildGroups(); } catch(e) { groups = {}; }
     renderSidebar();
     filterSidebarByAccess();
-    renderDashboard();
+    _restoreLastPage(); // ← buka halaman terakhir bukan selalu dashboard
+  } else {
+    // Coba restore session dari localStorage (saat reload)
+    var savedSession = _getSession();
+    if (savedSession && savedSession.username) {
+      // Ada session tersimpan
+      var isGAS2 = typeof google !== 'undefined' && google.script && google.script.run;
+      if (isGAS2) {
+        // Validasi ke server dulu — pastikan user masih aktif & ambil data terbaru
+        google.script.run
+          .withSuccessHandler(function(res) {
+            if (res && res.success) {
+              // Update session dengan data terbaru dari server
+              _saveSession(res);
+              _applyRestoredSession(res);
+            } else {
+              // Session tidak valid (user dinonaktifkan/dihapus) → minta login ulang
+              _clearSession();
+              document.getElementById('login-screen').style.display = 'flex';
+            }
+          })
+          .withFailureHandler(function() {
+            // Gagal koneksi ke server → tetap pakai session lokal (offline fallback)
+            _applyRestoredSession(savedSession);
+          })
+          .validateSession(savedSession.username);
+      } else {
+        // Mode offline — langsung pakai session tersimpan
+        _applyRestoredSession(savedSession);
+      }
+    }
   }
   renderColorSwatches();
   renderGroupOptions();
@@ -2242,11 +2272,11 @@ function toggleGroup(el) {
 // ============================================================
 function showDashboard() {
   currentBankId = null;
+  _saveLastPage('dashboard'); // ← simpan halaman terakhir
   document.getElementById('view-dashboard').style.display = 'block';
   document.getElementById('view-bank').style.display = 'none';
   renderSidebar();
   renderDashboard();
-  // HP bottom nav sync
   setHpNavActive('dashboard');
 }
 
@@ -2321,6 +2351,7 @@ function showBank(id) {
   var b = banks[id];
   if (!b) return;
   currentBankId = id;
+  _saveLastPage('bank', b.name, b.group); // ← simpan halaman terakhir
 
   document.getElementById('view-dashboard').style.display = 'none';
   document.getElementById('view-bank').style.display = 'block';
@@ -4553,6 +4584,92 @@ function loadBankDataFromGSheet(idx) {
 
 
 // ============================================================
+// ★ SESSION PERSISTENCE — simpan login agar tidak logout saat reload ★
+// ============================================================
+var SESSION_KEY = 'mba_session_v1';
+var LAST_PAGE_KEY = 'mba_last_page_v1';
+
+function _saveSession(user) {
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify(user)); } catch(e) {}
+  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(user)); } catch(e) {}
+}
+
+function _clearSession() {
+  try { localStorage.removeItem(SESSION_KEY); } catch(e) {}
+  try { sessionStorage.removeItem(SESSION_KEY); } catch(e) {}
+}
+
+function _getSession() {
+  var raw = null;
+  try { raw = sessionStorage.getItem(SESSION_KEY); } catch(e) {}
+  if (!raw) { try { raw = localStorage.getItem(SESSION_KEY); } catch(e) {} }
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch(e) { return null; }
+}
+
+// Simpan halaman terakhir: { type: 'dashboard' } atau { type: 'bank', bankName, bankGroup }
+function _saveLastPage(type, bankName, bankGroup) {
+  try {
+    var data = { type: type, bankName: bankName || null, bankGroup: bankGroup || null };
+    localStorage.setItem(LAST_PAGE_KEY, JSON.stringify(data));
+    sessionStorage.setItem(LAST_PAGE_KEY, JSON.stringify(data));
+  } catch(e) {}
+}
+
+function _getLastPage() {
+  var raw = null;
+  try { raw = sessionStorage.getItem(LAST_PAGE_KEY); } catch(e) {}
+  if (!raw) { try { raw = localStorage.getItem(LAST_PAGE_KEY); } catch(e) {} }
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch(e) { return null; }
+}
+
+// Restore halaman terakhir setelah login (dipanggil setelah data selesai dimuat)
+function _restoreLastPage() {
+  var last = _getLastPage();
+  if (!last || last.type === 'dashboard') {
+    showDashboard();
+    return;
+  }
+  if (last.type === 'bank' && last.bankName) {
+    // Cari bankId berdasarkan nama & grup
+    var foundId = null;
+    Object.keys(banks).forEach(function(id) {
+      var b = banks[id];
+      if (b.name === last.bankName && (b.group || '') === (last.bankGroup || '')) {
+        foundId = id;
+      }
+    });
+    if (foundId && _isBankVisible(foundId)) {
+      showBank(foundId);
+      return;
+    }
+  }
+  showDashboard();
+}
+
+// Terapkan session yang di-restore (setelah validasi server atau offline fallback)
+function _applyRestoredSession(user) {
+  currentUser = user;
+  var userTheme = 'dark';
+  try {
+    userTheme = localStorage.getItem(_themeKeyForUser(user.username))
+             || localStorage.getItem(_THEME_KEY_PREFIX + '__default__')
+             || 'dark';
+  } catch(e) {}
+  applyTheme(userTheme);
+  document.getElementById('login-screen').style.display = 'none';
+  applyUserAccess(user);
+  try { rebuildGroups(); } catch(e) { groups = {}; }
+  renderSidebar();
+  filterSidebarByAccess();
+  _restoreLastPage();
+  startAutoSync();
+  updateHpGreeting();
+  setHpNavActive('dashboard');
+}
+
+// ============================================================
 // ★ SISTEM TEMA (DARK / LIGHT) ★
 // ============================================================
 var _THEME_KEY_PREFIX = 'mba_theme_'; // + username
@@ -4678,6 +4795,8 @@ function showLoginError(msg) {
 
 function onLoginSuccess(user) {
   currentUser = user;
+  _saveSession(user); // ← simpan session agar tidak perlu login ulang saat reload
+
   // Terapkan tema yang tersimpan untuk user ini
   var userTheme = 'dark';
   try {
@@ -4690,23 +4809,18 @@ function onLoginSuccess(user) {
   document.getElementById('login-screen').style.display = 'none';
   applyUserAccess(user);
   // Jika data sudah selesai diload saat login, langsung render
-  // Jika belum (masih loading dari GSheet), init() akan render setelah selesai
   if (_dataReady) {
     try { rebuildGroups(); } catch(e) { console.error('rebuildGroups error:', e); groups = {}; }
     renderSidebar();
     filterSidebarByAccess();
-    renderDashboard();
+    _restoreLastPage(); // ← buka halaman terakhir, bukan selalu dashboard
     renderColorSwatches();
     renderGroupOptions();
   } else {
-    // Tampilkan indikator bahwa data sedang dimuat
     showSyncIndicator('loading', '⏳ Memuat data...');
   }
-  // Mulai polling auto-sync setelah login berhasil
   startAutoSync();
-  // Update greeting di HP topbar
   updateHpGreeting();
-  // Sync state hp-nav-dashboard
   setHpNavActive('dashboard');
 }
 
@@ -4749,7 +4863,8 @@ function handleNavUserClick() {
     okLabel: 'Ya, Logout', okClass: 'danger',
     onOk: function() {
       currentUser = null;
-      stopAutoSync(); // Hentikan polling saat logout
+      _clearSession(); // ← hapus session agar reload = login ulang
+      stopAutoSync();
       document.getElementById('nav-user-info').style.display = 'none';
       var ket = document.getElementById('nav-user-ket');
       if (ket) ket.style.display = 'none';
