@@ -2004,7 +2004,8 @@ var _renderSidebarBusy = false; // guard rekursi renderSidebar
             }, function() {
               loaded++;
               if (loaded === total) {
-                notes = {};
+                // FIX: Jangan reset notes={} di sini — bank lain yang berhasil load sudah punya notes.
+                // Cukup tampilkan warning, data yang berhasil tetap dipertahankan.
                 showSyncIndicator('warn', '⚠ Sebagian data gagal dimuat');
                 _finishInit();
               }
@@ -2969,6 +2970,9 @@ function applyUpload(csvData) {
     // Belum ada data sebelumnya — simpan langsung
     b.mutasi = csvData;
   }
+
+  // FIX: Pastikan success selalu true setelah import agar fungsi lain tidak ter-block
+  if (b.mutasi) b.mutasi.success = true;
 
   if (csvData.summary && csvData.summary.lastBalance > 0) {
     b.saldo = csvData.summary.lastBalance;
@@ -4243,13 +4247,17 @@ function _autoSaveBankToSheet(bankId) {
   var isGAS2 = true; // GAS Bridge active
   if (!isGAS2) return;
   var b = banks[bankId];
-  if (!b || !b.mutasi || !b.mutasi.success) return;
+  // FIX: Cek .transactions.length, bukan .success
+  // Import dari Excel tidak mengisi field 'success', guard lama menyebabkan data tidak tersimpan ke GSheet
+  if (!b || !b.mutasi || !b.mutasi.transactions || !b.mutasi.transactions.length) return;
 
   // Tandai bahwa sedang ada proses simpan — polling tidak boleh reload selama ini
   _savingInProgress++;
   // Optimistic: set _lastKnownTs ke sentinel agar polling tidak salah trigger
   // bahkan jika GAS lambat dan polling keburu jalan sebelum save selesai
   _lastKnownTs = '__saving__' + Date.now();
+
+  showToast('⏳ Menyimpan ke Google Sheets...', 'info', 5000);
 
   // Sertakan catatan ke dalam transaksi
   var mutasiWithNotes = JSON.parse(JSON.stringify(b.mutasi));
@@ -4264,13 +4272,17 @@ function _autoSaveBankToSheet(bankId) {
   gasCall('saveToSheets', [mutasiWithNotes, b.name, b.group, b.saldo, b.color], function(res) {
       _savingInProgress = Math.max(0, _savingInProgress - 1);
       if (res && res.success) {
+        showToast('✓ Data berhasil tersimpan ke Google Sheets!', 'success');
         // Update timestamp lokal agar polling tahu ini perubahan dari diri sendiri
         gasCall('getLastSavedTimestamp', [], function(tsRes) {
           if (tsRes && tsRes.ts) _lastKnownTs = tsRes.ts;
         }, function(){});
+      } else if (res && res.error) {
+        showToast('✗ Gagal simpan ke GSheet: ' + res.error, 'error', 6000);
       }
-    }, function() {
+    }, function(err) {
       _savingInProgress = Math.max(0, _savingInProgress - 1);
+      showToast('✗ Gagal simpan ke GSheet: ' + (err && err.message ? err.message : 'koneksi error'), 'error', 6000);
     });
 }
 
@@ -4554,6 +4566,8 @@ function loadBankDataFromGSheet(idx) {
       banks[bankId].mutasi = res;
       banks[bankId].saldo  = res.summary.lastBalance || meta.saldo;
       banks[bankId].color  = banks[bankId].color || meta.color;
+      // FIX: Pastikan success=true agar fungsi yang bergantung pada flag ini tidak terhambat
+      if (banks[bankId].mutasi) banks[bankId].mutasi.success = true;
 
       // Opsi B: baca notes & notesMeta dari kolom G sheet Transaksi
       (res.transactions || []).forEach(function(t) {
@@ -5555,9 +5569,12 @@ function _autoLoadBankFromGSheet(meta) {
   var isGAS2 = true; // GAS Bridge active
   if (!isGAS2) return;
   gasCall('loadBankFromSheets', [meta.name, meta.group], function(res) {
-      if (!res || res.error) return;
+      // FIX: Cek transactions, bukan hanya res.error — ada kasus res.success tidak diisi
+      if (!res || res.error || !res.transactions) return;
       var bankId = genId();
       banks[bankId] = { id: bankId, name: meta.name, group: meta.group, saldo: meta.saldo, color: meta.color || COLORS[0], mutasi: res };
+      // FIX: Pastikan success=true agar guard lain tidak terhambat
+      banks[bankId].mutasi.success = true;
       banks[bankId].saldo = res.summary.lastBalance || meta.saldo;
       if (!groups[meta.group]) groups[meta.group] = [];
       if (groups[meta.group].indexOf(bankId) === -1) groups[meta.group].push(bankId);
@@ -5588,8 +5605,11 @@ function _autoReloadBankFromGSheet(meta, bankId) {
     return;
   }
   gasCall('loadBankFromSheets', [meta.name, meta.group], function(res) {
-      if (!res || res.error) return;
+      // FIX: Cek transactions, bukan hanya res.error
+      if (!res || res.error || !res.transactions) return;
       banks[bankId].mutasi = res;
+      // FIX: Pastikan success=true setelah reload
+      banks[bankId].mutasi.success = true;
       banks[bankId].saldo  = res.summary.lastBalance || meta.saldo;
       // Merge catatan dari kolom G — JANGAN hapus catatan lokal dulu.
       // Catatan lokal yang belum tersimpan ke server (misalnya baru saja diisi)
