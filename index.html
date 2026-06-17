@@ -5681,36 +5681,11 @@ function _showSyncDot(active) {
 // Helper: jalankan auto koreksi saldo di background setelah save/load GSheet.
 // Tidak menampilkan modal — langsung kirim ke GAS dan update data di memori.
 function _triggerAutoKoreksiSaldo(bankId) {
-  var isGAS2 = true; // GAS Bridge active
-  if (!isGAS2) return;
-  var b = banks[bankId];
-  if (!b || !b.mutasi || !b.mutasi.transactions || !b.mutasi.transactions.length) return;
-
-  var saldoAwal = (b.saldoAwal > 0) ? b.saldoAwal : (b.mutasi.summary ? b.mutasi.summary.firstBalance || 0 : 0);
-
-  gasCall('autoKoreksiSaldo', [b.name, b.group, saldoAwal, true], function(res) {
-    if (!res || res.error) {
-      console.warn('[autoKoreksiSaldo]', res ? res.error : 'no response');
-      return;
-    }
-    if (res.success && res.fixed > 0) {
-      // Ada saldo yang dikoreksi — reload transaksi dari GSheet supaya UI terupdate
-      showToast('🔧 ' + res.fixed + ' saldo dikoreksi otomatis', 'info', 3000);
-      gasCall('loadBankFromSheets', [b.name, b.group], function(txnRes) {
-        if (!txnRes || txnRes.error || !txnRes.transactions) return;
-        b.mutasi         = txnRes;
-        b.mutasi.success = true;
-        b.saldo          = txnRes.summary.lastBalance || b.saldo;
-        if (currentBankId === bankId) {
-          renderBankStats(b.mutasi);
-          renderTxnTable();
-        }
-      }, function() {});
-    }
-    // fixed === 0 → semua saldo sudah benar, tidak perlu reload
-  }, function(err) {
-    console.warn('[autoKoreksiSaldo] gagal:', err && err.message);
-  });
+  // DISABLED: Koreksi saldo otomatis tidak bisa berjalan tanpa saldoAwal yang valid dari user.
+  // firstBalance dari summary = saldo SESUDAH transaksi pertama, bukan SEBELUM —
+  // kalau dipakai sebagai acuan awal, semua saldo langsung meleset jauh.
+  // Gunakan tombol "🔧 Koreksi Saldo" secara manual dan isi saldo awal yang benar.
+  return;
 }
 
 function openAutoKoreksiModal() {
