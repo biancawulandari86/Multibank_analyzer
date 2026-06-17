@@ -1049,7 +1049,7 @@ body.mode-hp #btn-hamburger { display: flex !important; }
      ============================================================ -->
 <script>
 // ── KONFIGURASI — isi URL GAS Web App kamu di sini ──
-var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbxahnvG_ulW9JSOsyQEsuUOmaN9A622FrcRZ9U9ioPtdV6dgpLaRGZUF6v3E-15FKH0/exec';
+var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbwluTMsfR6YigyTq-sTWm_PerKH9l1UoRYlqHyg7eF9uYjgJRoqcFkQ3k-2i9-4NnRf/exec';
 
 // ── Bridge: gasCall(funcName, args, onSuccess, onFailure) ──
 // Meniru perilaku gasCall('funcName', [], , function(e){ console.error(e); })
@@ -1427,6 +1427,7 @@ function gasCall(funcName, args, onSuccess, onFailure) {
           <button class="btn-sm" id="btn-input-manual" onclick="openAddTxnModal()" style="display:none">✏ Input Manual</button>
           <button class="btn-sm" id="btn-paste-excel" onclick="openPasteModal()" style="display:none">📋 Paste Excel</button>
           <button class="btn-sm primary" id="btn-save-gsheet" onclick="saveBankToGSheet()" style="display:none">💾 Simpan ke GSheet</button>
+          <button class="btn-sm" id="btn-auto-koreksi" onclick="jalankanAutoKoreksi()" title="Perbaiki nilai desimal yang salah format di GSheet">🔧 Koreksi Desimal</button>
           <button class="btn-sm" onclick="openEditBankModal()">✏ Edit Bank</button>
           <button class="btn-sm danger" onclick="deleteCurrentBank()">🗑 Hapus</button>
           <button class="btn-sm" onclick="showDashboard()">← Dashboard</button>
@@ -2734,6 +2735,46 @@ function _doDeleteCurrentBank() {
 }
 
 // ============================================================
+// AUTO KOREKSI DESIMAL — Perbaiki nilai angka di GSheet
+// ============================================================
+function jalankanAutoKoreksi() {
+  if (!currentBankId) { showToast('Pilih bank terlebih dahulu.', 'error'); return; }
+  var b = banks[currentBankId];
+  var bankName = b ? b.name : '';
+  showConfirm({
+    icon: '🔧',
+    title: 'Auto Koreksi Desimal',
+    msg: 'Fitur ini akan memperbaiki kolom Saldo di GSheet untuk bank "' + bankName + '" — nilai yang salah format seperti 1.500 akan dikoreksi jadi 1500.\n\nKolom Debet dan Kredit tidak akan diubah.\n\nLanjutkan?',
+    okLabel: 'Ya, Koreksi Sekarang', okClass: 'primary',
+    onOk: function() { _doAutoKoreksi(bankName); }
+  });
+}
+function _doAutoKoreksi(bankName) {
+  showToast('Menjalankan koreksi desimal...', 'info');
+  // Pause autoload selama koreksi berlangsung agar tidak bentrok
+  _savingInProgress++;
+  gasCall('autoKoreksiDesimal', [bankName], function(result) {
+    _savingInProgress = Math.max(0, _savingInProgress - 1);
+    if (result && result.success) {
+      var msg = 'Koreksi selesai! ' + result.totalFixed + ' baris diperbaiki.';
+      if (result.sheets && result.sheets.length > 0) {
+        msg += '\n• ' + result.sheets.map(function(s){ return s.sheet + ': ' + s.fixed + '/' + s.total; }).join('\n• ');
+      }
+      showToast(msg, 'success');
+      // Update timestamp referensi autoload agar tidak trigger reload ulang
+      _initSyncTimestamp();
+      // Reload data bank dari GSheet setelah koreksi
+      if (typeof loadBankDetail === 'function') loadBankDetail(currentBankId);
+    } else {
+      showToast('Gagal: ' + (result && result.error ? result.error : 'Unknown error'), 'error');
+    }
+  }, function(err) {
+    _savingInProgress = Math.max(0, _savingInProgress - 1);
+    showToast('Error: ' + err.message, 'error');
+  });
+}
+
+// ============================================================
 // MODAL: UPLOAD CSV
 // ============================================================
 function openUploadModal() {
@@ -3713,10 +3754,22 @@ function clientProcessCSV(csvText, bankType) {
   }
   function cleanNumber(str) {
     if(!str||str===''||str==='-') return 0;
-    var c=String(str).replace(/[^\d.,\-]/g,'');
-    if(c.indexOf(',')!==-1&&c.indexOf('.')!==-1){c=c.replace(/\./g,'').replace(',','.');}
-    else if(c.indexOf(',')!==-1){var cp=c.lastIndexOf(',');if(c.length-cp-1<=2)c=c.replace(',','.');else c=c.replace(/,/g,'');}
-    var n=parseFloat(c);return isNaN(n)?0:Math.abs(n);
+    var s=String(str).replace(/[^\d.,\-]/g,'').trim();
+    if(!s||s==='-') return 0;
+    var hasDot=s.indexOf('.')!==-1, hasComma=s.indexOf(',')!==-1;
+    if(hasDot&&hasComma){
+      var lastDot=s.lastIndexOf('.'),lastComma=s.lastIndexOf(',');
+      if(lastComma>lastDot){s=s.replace(/\./g,'').replace(',','.');}
+      else{s=s.replace(/,/g,'');}
+    } else if(hasComma&&!hasDot){
+      var afterComma=s.length-s.lastIndexOf(',')-1;
+      if(afterComma<=2){s=s.replace(',','.');}else{s=s.replace(/,/g,'');}
+    } else if(hasDot&&!hasComma){
+      var dotCount=(s.match(/\./g)||[]).length;
+      if(dotCount>1){s=s.replace(/\./g,'');}
+      else{var afterDot=s.length-s.lastIndexOf('.')-1;if(afterDot===3)s=s.replace(/\./g,'');}
+    }
+    var n=parseFloat(s);return isNaN(n)?0:Math.abs(n);
   }
   function parseDate(str) {
     if(!str) return null;
