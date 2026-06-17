@@ -5681,18 +5681,39 @@ function _showSyncDot(active) {
 // Helper: jalankan auto koreksi saldo di background setelah save/load GSheet.
 // Tidak menampilkan modal — langsung kirim ke GAS dan update data di memori.
 function _triggerAutoKoreksiSaldo(bankId) {
-  // DISABLED: Koreksi saldo otomatis tidak bisa berjalan tanpa saldoAwal yang valid dari user.
-  // firstBalance dari summary = saldo SESUDAH transaksi pertama, bukan SEBELUM —
-  // kalau dipakai sebagai acuan awal, semua saldo langsung meleset jauh.
-  // Gunakan tombol "🔧 Koreksi Saldo" secara manual dan isi saldo awal yang benar.
-  return;
+  // Hanya jalan jika saldoAwal tersimpan secara eksplisit di data bank (diset user)
+  // Tidak pakai firstBalance dari summary — itu saldo SESUDAH transaksi pertama, bukan SEBELUM
+  var b = banks[bankId];
+  if (!b || !b.mutasi || !b.mutasi.transactions || !b.mutasi.transactions.length) return;
+  if (!(b.saldoAwal > 0)) return; // skip jika saldoAwal belum pernah diset user
+  var saldoAwal = b.saldoAwal;
+  gasCall('autoKoreksiSaldo', [b.name, b.group, saldoAwal, true], function(res) {
+    if (!res || res.error) { console.warn('[autoKoreksiSaldo]', res ? res.error : 'no response'); return; }
+    if (res.success && res.fixed > 0) {
+      showToast('🔧 ' + res.fixed + ' saldo dikoreksi otomatis', 'info', 3000);
+      gasCall('loadBankFromSheets', [b.name, b.group], function(txnRes) {
+        if (!txnRes || txnRes.error || !txnRes.transactions) return;
+        b.mutasi = txnRes; b.mutasi.success = true;
+        b.saldo  = txnRes.summary.lastBalance || b.saldo;
+        if (currentBankId === bankId) { renderBankStats(b.mutasi); renderTxnTable(); }
+      }, function() {});
+    }
+  }, function(err) { console.warn('[autoKoreksiSaldo] gagal:', err && err.message); });
 }
 
 function openAutoKoreksiModal() {
   var b = banks[currentBankId];
   if (!b) return;
-  // Pre-fill saldo awal dari data bank
-  var saldoAwal = (b.saldoAwal > 0) ? b.saldoAwal : 0;
+  // Pre-fill saldo awal: hitung mundur dari transaksi pertama
+  // saldoAwal = saldo transaksi pertama - kredit pertama + debit pertama
+  var saldoAwal = 0;
+  if (b.saldoAwal > 0) {
+    saldoAwal = b.saldoAwal;
+  } else if (b.mutasi && b.mutasi.transactions && b.mutasi.transactions.length) {
+    var t0 = b.mutasi.transactions[0];
+    saldoAwal = (t0.balance || 0) - (t0.credit || 0) + (t0.debit || 0);
+    if (saldoAwal < 0) saldoAwal = 0;
+  }
   document.getElementById('input-koreksi-saldo-awal').value = saldoAwal;
   document.getElementById('koreksi-status').style.display = 'none';
   document.getElementById('btn-do-koreksi').disabled = false;
@@ -5725,6 +5746,10 @@ function doAutoKoreksiSaldo() {
       if (res.skipped > 0) msg += ' (' + res.skipped + ' baris PEND/kosong dilewati)';
       msg += '<br>Saldo akhir: <strong style="font-family:var(--mono)">' + fmt(res.saldoAkhir) + '</strong>';
       _showKoreksiStatus('success', msg);
+
+      // Simpan saldoAwal ke data bank agar background sync bisa pakai nilai yang benar
+      b.saldoAwal = saldoAwal;
+      save();
 
       // Reload data dari GSheet agar tampilan saldo di app ikut terupdate
       showToast('✓ Saldo berhasil dikoreksi! Memuat ulang data...', 'success', 3000);
