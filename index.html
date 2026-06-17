@@ -1049,7 +1049,7 @@ body.mode-hp #btn-hamburger { display: flex !important; }
      ============================================================ -->
 <script>
 // ── KONFIGURASI — isi URL GAS Web App kamu di sini ──
-var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycby02vVsF5hSpHUyTIHwlLxT6RGNvrW4Ac6Ufzw9sJ_VgvYYMgfdZXfuNRd0OSvjhqAr/exec';
+var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbwpG2LCTeSkh5Uhf-_Z5abWLlsYnJAXQseYgcMQUOQgVXDPtX2wmRDstOB3x8jkALXI/exec';
 
 // ── Bridge: gasCall(funcName, args, onSuccess, onFailure) ──
 // Meniru perilaku gasCall('funcName', [], , function(e){ console.error(e); })
@@ -1427,6 +1427,7 @@ function gasCall(funcName, args, onSuccess, onFailure) {
           <button class="btn-sm" id="btn-input-manual" onclick="openAddTxnModal()" style="display:none">✏ Input Manual</button>
           <button class="btn-sm" id="btn-paste-excel" onclick="openPasteModal()" style="display:none">📋 Paste Excel</button>
           <button class="btn-sm primary" id="btn-save-gsheet" onclick="saveBankToGSheet()" style="display:none">💾 Simpan ke GSheet</button>
+          <button class="btn-sm" id="btn-auto-koreksi" onclick="openAutoKoreksiModal()" style="display:none" title="Hitung ulang kolom Saldo berdasarkan Saldo Awal + Debet/Kredit">🔧 Koreksi Saldo</button>
           <button class="btn-sm" onclick="openEditBankModal()">✏ Edit Bank</button>
           <button class="btn-sm danger" onclick="deleteCurrentBank()">🗑 Hapus</button>
           <button class="btn-sm" onclick="showDashboard()">← Dashboard</button>
@@ -2391,6 +2392,9 @@ function showBank(id) {
     // Tampilkan tombol simpan ke GSheet hanya jika di GAS
     var btnSave = document.getElementById('btn-save-gsheet');
     if (btnSave && isGAS) btnSave.style.display = 'inline-block';
+    // Tampilkan tombol Auto Koreksi Saldo jika di GAS dan ada transaksi
+    var btnKoreksi = document.getElementById('btn-auto-koreksi');
+    if (btnKoreksi && isGAS) btnKoreksi.style.display = 'inline-block';
     // Tampilkan tombol Riwayat Import jika ada batch tercatat
     var btnHist = document.getElementById('btn-import-history');
     if (btnHist) btnHist.style.display = (b.importBatches && b.importBatches.length) ? 'inline-block' : 'none';
@@ -2404,6 +2408,8 @@ function showBank(id) {
     document.getElementById('bank-detail-tabs').style.display = 'none';
     var btnSave = document.getElementById('btn-save-gsheet');
     if (btnSave) btnSave.style.display = 'none';
+    var btnKoreksi2 = document.getElementById('btn-auto-koreksi');
+    if (btnKoreksi2) btnKoreksi2.style.display = 'none';
     var btnHist = document.getElementById('btn-import-history');
     if (btnHist) btnHist.style.display = 'none';
   }
@@ -4277,6 +4283,8 @@ function _autoSaveBankToSheet(bankId) {
         gasCall('getLastSavedTimestamp', [], function(tsRes) {
           if (tsRes && tsRes.ts) _lastKnownTs = tsRes.ts;
         }, function(){});
+        // Auto koreksi saldo setelah data tersimpan
+        _triggerAutoKoreksiSaldo(bankId);
       } else if (res && res.error) {
         showToast('✗ Gagal simpan ke GSheet: ' + res.error, 'error', 6000);
       }
@@ -4568,6 +4576,8 @@ function loadBankDataFromGSheet(idx) {
       banks[bankId].color  = banks[bankId].color || meta.color;
       // FIX: Pastikan success=true agar fungsi yang bergantung pada flag ini tidak terhambat
       if (banks[bankId].mutasi) banks[bankId].mutasi.success = true;
+      // Auto koreksi saldo setelah load dari GSheet
+      _triggerAutoKoreksiSaldo(bankId);
 
       // Opsi B: baca notes & notesMeta dari kolom G sheet Transaksi
       (res.transactions || []).forEach(function(t) {
@@ -5592,6 +5602,8 @@ function _autoLoadBankFromGSheet(meta) {
       rebuildGroups();
       renderSidebar();
       renderDashboard();
+      // Auto koreksi saldo setelah load startup
+      _triggerAutoKoreksiSaldo(bankId);
     }, function() {});
 }
 
@@ -5661,6 +5673,128 @@ function _showSyncDot(active) {
   dot.style.display = active ? 'inline-block' : 'none';
 }
 
+
+// ============================================================
+// ★ AUTO KOREKSI SALDO ★
+// ============================================================
+
+// Helper: jalankan auto koreksi saldo di background setelah save/load GSheet.
+// Tidak menampilkan modal — langsung kirim ke GAS dan update data di memori.
+function _triggerAutoKoreksiSaldo(bankId) {
+  var isGAS2 = true; // GAS Bridge active
+  if (!isGAS2) return;
+  var b = banks[bankId];
+  if (!b || !b.mutasi || !b.mutasi.transactions || !b.mutasi.transactions.length) return;
+
+  var saldoAwal = (b.saldoAwal > 0) ? b.saldoAwal : (b.mutasi.summary ? b.mutasi.summary.firstBalance || 0 : 0);
+
+  gasCall('autoKoreksiSaldo', [b.name, b.group, saldoAwal], function(res) {
+    if (!res || res.error) {
+      console.warn('[autoKoreksiSaldo]', res ? res.error : 'no response');
+      return;
+    }
+    if (res.success && res.fixed > 0) {
+      // Ada saldo yang dikoreksi — reload transaksi dari GSheet supaya UI terupdate
+      showToast('🔧 ' + res.fixed + ' saldo dikoreksi otomatis', 'info', 3000);
+      gasCall('loadBankFromSheets', [b.name, b.group], function(txnRes) {
+        if (!txnRes || txnRes.error || !txnRes.transactions) return;
+        b.mutasi         = txnRes;
+        b.mutasi.success = true;
+        b.saldo          = txnRes.summary.lastBalance || b.saldo;
+        if (currentBankId === bankId) {
+          renderBankStats(b.mutasi);
+          renderTxnTable();
+        }
+      }, function() {});
+    }
+    // fixed === 0 → semua saldo sudah benar, tidak perlu reload
+  }, function(err) {
+    console.warn('[autoKoreksiSaldo] gagal:', err && err.message);
+  });
+}
+
+function openAutoKoreksiModal() {
+  var b = banks[currentBankId];
+  if (!b) return;
+  // Pre-fill saldo awal dari data bank
+  var saldoAwal = (b.saldoAwal > 0) ? b.saldoAwal : 0;
+  document.getElementById('input-koreksi-saldo-awal').value = saldoAwal;
+  document.getElementById('koreksi-status').style.display = 'none';
+  document.getElementById('btn-do-koreksi').disabled = false;
+  document.getElementById('btn-do-koreksi').textContent = '🔧 Koreksi Sekarang';
+  openModal('modal-auto-koreksi');
+}
+
+function doAutoKoreksiSaldo() {
+  var b = banks[currentBankId];
+  if (!b) return;
+
+  var saldoAwal = parseFloat(document.getElementById('input-koreksi-saldo-awal').value) || 0;
+  var statusEl  = document.getElementById('koreksi-status');
+  var btnEl     = document.getElementById('btn-do-koreksi');
+
+  btnEl.disabled    = true;
+  btnEl.textContent = '⏳ Memproses...';
+  _showKoreksiStatus('info', '⏳ Menghitung ulang saldo di Google Sheets...');
+
+  gasCall('autoKoreksiSaldo', [b.name, b.group, saldoAwal], function(res) {
+    btnEl.disabled    = false;
+    btnEl.textContent = '🔧 Koreksi Sekarang';
+
+    if (res && res.error) {
+      _showKoreksiStatus('error', '✗ Error: ' + res.error);
+      return;
+    }
+    if (res && res.success) {
+      var msg = '✓ Selesai! ' + res.fixed + ' baris saldo dikoreksi dari total ' + res.total + ' transaksi.';
+      if (res.skipped > 0) msg += ' (' + res.skipped + ' baris PEND/kosong dilewati)';
+      msg += '<br>Saldo akhir: <strong style="font-family:var(--mono)">' + fmt(res.saldoAkhir) + '</strong>';
+      _showKoreksiStatus('success', msg);
+
+      // Reload data dari GSheet agar tampilan saldo di app ikut terupdate
+      showToast('✓ Saldo berhasil dikoreksi! Memuat ulang data...', 'success', 3000);
+      setTimeout(function() {
+        closeModal('modal-auto-koreksi');
+        // Reload transaksi dari sheet
+        gasCall('loadBankFromSheets', [b.name, b.group], function(txnRes) {
+          if (txnRes && txnRes.success) {
+            b.mutasi = txnRes;
+            renderBankStats(b.mutasi);
+            txnPage = 1;
+            renderTxnTable();
+            showToast('✓ Data berhasil dimuat ulang dari GSheet', 'success');
+          }
+        }, function(err) {
+          showToast('⚠ Koreksi berhasil, tapi gagal reload: ' + (err && err.message ? err.message : 'error'), 'warn');
+        });
+      }, 2000);
+    }
+  }, function(err) {
+    btnEl.disabled    = false;
+    btnEl.textContent = '🔧 Koreksi Sekarang';
+    _showKoreksiStatus('error', '✗ Gagal: ' + (err && err.message ? err.message : 'koneksi error'));
+  });
+}
+
+function _showKoreksiStatus(type, msg) {
+  var el = document.getElementById('koreksi-status');
+  el.style.display = 'block';
+  el.innerHTML     = msg;
+  if (type === 'success') {
+    el.style.background = 'var(--green-dim)';
+    el.style.color      = 'var(--green)';
+    el.style.border     = '1px solid rgba(34,211,160,0.25)';
+  } else if (type === 'error') {
+    el.style.background = 'var(--red-dim)';
+    el.style.color      = 'var(--red)';
+    el.style.border     = '1px solid rgba(240,92,110,0.25)';
+  } else {
+    el.style.background = 'var(--surface2)';
+    el.style.color      = 'var(--muted)';
+    el.style.border     = '1px solid var(--border)';
+  }
+}
+
 </script>
 
 
@@ -5686,6 +5820,38 @@ function _showSyncDot(active) {
     <div class="modal-footer">
       <button class="btn-sm" onclick="closeModal('modal-save-gsheet')">Batal</button>
       <button class="btn-sm primary" id="btn-do-save-gsheet" onclick="doSaveToGSheet()">💾 Simpan Sekarang</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     MODAL: AUTO KOREKSI SALDO
+     ══════════════════════════════════════════ -->
+<div class="modal-backdrop" id="modal-auto-koreksi">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <div class="modal-title">🔧 Auto Koreksi Saldo</div>
+      <div class="modal-close" onclick="closeModal('modal-auto-koreksi')">✕</div>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:16px;line-height:1.7;">
+        Hitung ulang kolom <strong style="color:var(--text)">Saldo</strong> di Google Sheets berdasarkan akumulasi debet/kredit.<br>
+        Nilai <strong style="color:var(--text)">Debet</strong> dan <strong style="color:var(--text)">Kredit</strong> tidak akan diubah — hanya saldo yang dikoreksi.
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-size:11px;text-transform:uppercase;letter-spacing:0.8px;color:var(--muted2);display:block;margin-bottom:6px;">Saldo Awal (sebelum transaksi pertama)</label>
+        <input type="number" id="input-koreksi-saldo-awal" class="input-field" placeholder="Contoh: 5000000"
+          style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm);padding:8px 12px;color:var(--text);font-family:var(--mono);font-size:13px;">
+        <div style="font-size:11px;color:var(--muted2);margin-top:5px;">Isi 0 jika tidak ada saldo awal atau saldo awal sudah 0.</div>
+      </div>
+      <div id="koreksi-status" style="display:none;padding:10px 12px;border-radius:var(--r-sm);font-size:12px;margin-bottom:8px;"></div>
+      <div style="font-size:11px;color:var(--amber);padding:10px 12px;background:var(--amber-dim);border-radius:var(--r-sm);border:1px solid rgba(245,166,35,0.2);">
+        ⚠ Operasi ini akan <strong>menimpa kolom Saldo</strong> di sheet GSheet. Pastikan data sudah tersimpan ke GSheet terlebih dahulu.
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-sm" onclick="closeModal('modal-auto-koreksi')">Batal</button>
+      <button class="btn-sm primary" id="btn-do-koreksi" onclick="doAutoKoreksiSaldo()">🔧 Koreksi Sekarang</button>
     </div>
   </div>
 </div>
