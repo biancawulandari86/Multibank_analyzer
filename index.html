@@ -1049,7 +1049,7 @@ body.mode-hp #btn-hamburger { display: flex !important; }
      ============================================================ -->
 <script>
 // ── KONFIGURASI — isi URL GAS Web App kamu di sini ──
-var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbwhcCvcTFRzYgMDiax2GRAwJcsPgPqtzbetLabYMidgR_80Lafsv4hxD11BA4jqHGa9/exec';
+var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbzynJP14CZLfZJCwHVguEwIPTult2tpBmLvbEsdMOg0dNJqhbaWqVcQG5xbk22B3gUF/exec';
 
 // ── Bridge: gasCall(funcName, args, onSuccess, onFailure) ──
 // Meniru perilaku gasCall('funcName', [], , function(e){ console.error(e); })
@@ -5602,8 +5602,8 @@ function _autoLoadBankFromGSheet(meta) {
       rebuildGroups();
       renderSidebar();
       renderDashboard();
-      // Auto koreksi saldo setelah load startup
-      _triggerAutoKoreksiSaldo(bankId);
+      // _triggerAutoKoreksiSaldo dihapus dari sini — mencegah loop:
+      // koreksi background update timestamp → polling detect perubahan → reload → koreksi lagi
     }, function() {});
 }
 
@@ -5688,7 +5688,7 @@ function _triggerAutoKoreksiSaldo(bankId) {
 
   var saldoAwal = (b.saldoAwal > 0) ? b.saldoAwal : (b.mutasi.summary ? b.mutasi.summary.firstBalance || 0 : 0);
 
-  gasCall('autoKoreksiSaldo', [b.name, b.group, saldoAwal], function(res) {
+  gasCall('autoKoreksiSaldo', [b.name, b.group, saldoAwal, true], function(res) {
     if (!res || res.error) {
       console.warn('[autoKoreksiSaldo]', res ? res.error : 'no response');
       return;
