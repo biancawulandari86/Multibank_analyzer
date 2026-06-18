@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Multi-Bank Mutasi Analyzer</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <style>
 :root {
   --bg: #0a0c10;
@@ -1428,6 +1429,7 @@ function gasCall(funcName, args, onSuccess, onFailure) {
           <button class="btn-sm" id="btn-paste-excel" onclick="openPasteModal()" style="display:none">📋 Paste Excel</button>
           <button class="btn-sm primary" id="btn-save-gsheet" onclick="saveBankToGSheet()" style="display:none">💾 Simpan ke GSheet</button>
           <button class="btn-sm" id="btn-auto-koreksi" onclick="jalankanAutoKoreksi()" title="Perbaiki nilai desimal yang salah format di GSheet">🔧 Koreksi Desimal</button>
+          <button class="btn-sm" id="btn-auto-koreksi-saldo" onclick="jalankanAutoKoreksiSaldo()" title="Hitung ulang kolom Saldo dari Debet/Kredit, tanpa perlu input saldo awal">💰 Koreksi Saldo</button>
           <button class="btn-sm" onclick="openEditBankModal()">✏ Edit Bank</button>
           <button class="btn-sm danger" onclick="deleteCurrentBank()">🗑 Hapus</button>
           <button class="btn-sm" onclick="showDashboard()">← Dashboard</button>
@@ -2453,15 +2455,13 @@ function clearTxnDate() {
   txnPage = 1; renderTxnTable();
 }
 
-// ── TXN TABLE ──
-function renderTxnTable() {
-  var b = banks[currentBankId];
-  if (!b || !b.mutasi || !b.mutasi.transactions) return;
+// ── FILTER TRANSAKSI (dipakai bersama oleh tabel & export) ──
+function getFilteredTxns(b) {
   var search = (document.getElementById('txn-search').value||'').toLowerCase();
   var dateFrom = document.getElementById('txn-date-from').value; // 'YYYY-MM-DD'
   var dateTo   = document.getElementById('txn-date-to').value;
   var filter = document.getElementById('txn-filter').value;
-  var txns = b.mutasi.transactions.filter(function(t) {
+  return b.mutasi.transactions.filter(function(t) {
     if (filter !== 'all' && t.type !== filter) return false;
     if (search) {
       var nk2 = noteKey(currentBankId, t.date, t.desc, t.debit, t.credit, t.txnId);
@@ -2471,13 +2471,20 @@ function renderTxnTable() {
       if (!descMatch && !noteMatch) return false;
     }
     if (dateFrom || dateTo) {
-      // t.date format may be DD/MM/YYYY or YYYY-MM-DD; normalize to YYYY-MM-DD for comparison
+      // t.date format may be DD/MM/YYYY atau YYYY-MM-DD; normalize ke YYYY-MM-DD untuk dibandingkan
       var td = normalizeDate(t.date);
       if (dateFrom && td < dateFrom) return false;
       if (dateTo   && td > dateTo)   return false;
     }
     return true;
   });
+}
+
+// ── TXN TABLE ──
+function renderTxnTable() {
+  var b = banks[currentBankId];
+  if (!b || !b.mutasi || !b.mutasi.transactions) return;
+  var txns = getFilteredTxns(b);
   var total = txns.length;
   var pages = Math.max(1, Math.ceil(total/PAGE));
   if (txnPage > pages) txnPage = pages;
@@ -2764,6 +2771,45 @@ function _doAutoKoreksi(bankName) {
       // Update timestamp referensi autoload agar tidak trigger reload ulang
       _initSyncTimestamp();
       // Reload data bank dari GSheet setelah koreksi
+      if (typeof loadBankDetail === 'function') loadBankDetail(currentBankId);
+    } else {
+      showToast('Gagal: ' + (result && result.error ? result.error : 'Unknown error'), 'error');
+    }
+  }, function(err) {
+    _savingInProgress = Math.max(0, _savingInProgress - 1);
+    showToast('Error: ' + err.message, 'error');
+  });
+}
+
+// ============================================================
+// AUTO KOREKSI SALDO BERJALAN — Hitung ulang Saldo dari Debet/Kredit
+// Tidak perlu input saldo awal: baris pertama yang sudah ada di sheet
+// dipakai sebagai jangkar, baris berikutnya dihitung ulang.
+// ============================================================
+function jalankanAutoKoreksiSaldo() {
+  if (!currentBankId) { showToast('Pilih bank terlebih dahulu.', 'error'); return; }
+  var b = banks[currentBankId];
+  var bankName = b ? b.name : '';
+  showConfirm({
+    icon: '💰',
+    title: 'Auto Koreksi Saldo Berjalan',
+    msg: 'Fitur ini akan menghitung ulang kolom Saldo untuk bank "' + bankName + '" berdasarkan Debet/Kredit setiap baris.\n\nBaris PERTAMA dipakai sebagai acuan (dianggap benar) dan TIDAK diubah — baris-baris setelahnya akan dikoreksi mengikuti rumus: saldo sebelumnya − Debet + Kredit.\n\nPastikan baris pertama di sheet sudah benar sebelum melanjutkan.\n\nLanjutkan?',
+    okLabel: 'Ya, Koreksi Sekarang', okClass: 'primary',
+    onOk: function() { _doAutoKoreksiSaldo(bankName); }
+  });
+}
+function _doAutoKoreksiSaldo(bankName) {
+  showToast('Menjalankan koreksi saldo...', 'info');
+  _savingInProgress++;
+  gasCall('autoKoreksiSaldoBerjalan', [bankName], function(result) {
+    _savingInProgress = Math.max(0, _savingInProgress - 1);
+    if (result && result.success) {
+      var msg = 'Koreksi saldo selesai! ' + result.totalFixed + ' baris diperbaiki.';
+      if (result.sheets && result.sheets.length > 0) {
+        msg += '\n• ' + result.sheets.map(function(s){ return s.sheet + ': ' + s.fixed + '/' + s.total + (s.skipped ? ' (' + s.skipped + ')' : ''); }).join('\n• ');
+      }
+      showToast(msg, 'success');
+      _initSyncTimestamp();
       if (typeof loadBankDetail === 'function') loadBankDetail(currentBankId);
     } else {
       showToast('Gagal: ' + (result && result.error ? result.error : 'Unknown error'), 'error');
@@ -4342,24 +4388,124 @@ function _autoSaveBankToSheet(bankId) {
 // ============================================================
 // EXPORT
 // ============================================================
-function toCSV(rows, hdrs) {
-  var lines = [hdrs.join(',')];
-  rows.forEach(function(r){ lines.push(r.map(function(v){return '"'+String(v).replace(/"/g,'""')+'"';}).join(',')); });
-  return lines.join('\n');
+var BULAN_ID = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+
+function formatTanggalID(dateStr) {
+  var iso = normalizeDate(dateStr);
+  var m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return dateStr;
+  var mo = parseInt(m[2],10)-1;
+  return m[3] + ' ' + (BULAN_ID[mo]||m[2]) + ' ' + m[1];
 }
-function downloadCSV(content, filename) {
-  var blob = new Blob(['\uFEFF'+content],{type:'text/csv;charset=utf-8;'});
+
+async function exportTxn() {
+  var b = banks[currentBankId]; if (!b||!b.mutasi) return;
+  var txns = getFilteredTxns(b).slice().sort(function(a,c){
+    var da = normalizeDate(a.date), dc = normalizeDate(c.date);
+    return da < dc ? -1 : (da > dc ? 1 : 0);
+  });
+  if (!txns.length) { showToast('Tidak ada transaksi untuk diexport.', 'warn'); return; }
+  if (typeof ExcelJS === 'undefined') { showToast('Library Excel belum termuat, cek koneksi internet lalu coba lagi.', 'error'); return; }
+
+  // ── Hitung SALDO AWAL (saldo terakhir sebelum transaksi pertama yang difilter) ──
+  var firstIso = normalizeDate(txns[0].date);
+  var allSorted = b.mutasi.transactions.slice().sort(function(a,c){
+    var da = normalizeDate(a.date), dc = normalizeDate(c.date);
+    return da < dc ? -1 : (da > dc ? 1 : 0);
+  });
+  var saldoAwalVal = b.saldoAwal || 0;
+  allSorted.forEach(function(t){ if (normalizeDate(t.date) < firstIso) saldoAwalVal = t.balance; });
+
+  // ── Judul & sub-judul ──
+  var bulanSet = {};
+  txns.forEach(function(t){ bulanSet[normalizeDate(t.date).slice(0,7)] = true; });
+  var bulanKeys = Object.keys(bulanSet);
+  var tahunUtama = firstIso.slice(0,4);
+  var judul = 'MUTASI BANK ' + (b.name||'').toUpperCase() + ' ' + tahunUtama;
+  var subjudul;
+  if (bulanKeys.length === 1) {
+    var moIdx = parseInt(bulanKeys[0].slice(5,7),10)-1;
+    subjudul = (BULAN_ID[moIdx]||'').toUpperCase() + ' ' + tahunUtama;
+  } else {
+    subjudul = 'PERIODE ' + formatTanggalID(txns[0].date).toUpperCase() + ' \u2013 ' + formatTanggalID(txns[txns.length-1].date).toUpperCase();
+  }
+
+  // ── Bangun workbook ──
+  var wb = new ExcelJS.Workbook();
+  var ws = wb.addWorksheet('Mutasi', { views: [{ showGridLines: false }] });
+  ws.columns = [{ width: 16 }, { width: 52 }, { width: 22 }, { width: 22 }];
+
+  var thin = { style: 'thin', color: { argb: 'FF000000' } };
+  var allBorder = { top: thin, left: thin, bottom: thin, right: thin };
+  var fmtRp = '"Rp" #,##0.00';
+
+  ws.mergeCells('A1:D1');
+  var c1 = ws.getCell('A1');
+  c1.value = judul; c1.font = { bold: true, size: 14 }; c1.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws.getRow(1).height = 22;
+
+  ws.mergeCells('A2:D2');
+  var c2 = ws.getCell('A2');
+  c2.value = subjudul; c2.font = { bold: true, size: 12 }; c2.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws.getRow(2).height = 20;
+
+  ws.mergeCells('A3:A4');
+  ws.mergeCells('B3:B4');
+  ws.mergeCells('C3:D3');
+  ws.getCell('A3').value = 'Tanggal';
+  ws.getCell('B3').value = 'Keterangan';
+  ws.getCell('C3').value = 'Jenis Transaksi';
+  ws.getCell('C4').value = 'KREDIT';
+  ws.getCell('D4').value = 'DEBET';
+  ['A3','B3','C3','A4','B4','C4','D4'].forEach(function(addr){
+    var cell = ws.getCell(addr);
+    cell.font = { bold: true };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.border = allBorder;
+  });
+
+  var startRow = 5;
+  var rIdx = startRow;
+
+  var saldoRow = ws.getRow(rIdx);
+  saldoRow.getCell(1).value = formatTanggalID(txns[0].date);
+  saldoRow.getCell(2).value = 'SALDO AWAL';
+  saldoRow.getCell(2).font = { bold: true };
+  if (saldoAwalVal) {
+    saldoRow.getCell(3).value = saldoAwalVal;
+    saldoRow.getCell(3).numFmt = fmtRp;
+  }
+  rIdx++;
+
+  txns.forEach(function(t) {
+    var row = ws.getRow(rIdx);
+    row.getCell(1).value = formatTanggalID(t.date);
+    row.getCell(2).value = t.desc || '';
+    if (t.credit > 0) { row.getCell(3).value = t.credit; row.getCell(3).numFmt = fmtRp; }
+    if (t.debit  > 0) { row.getCell(4).value = t.debit;  row.getCell(4).numFmt = fmtRp; }
+    rIdx++;
+  });
+
+  for (var r = startRow; r < rIdx; r++) {
+    for (var c = 1; c <= 4; c++) {
+      var cell = ws.getCell(r, c);
+      cell.border = allBorder;
+      cell.alignment = { horizontal: (c <= 2 ? 'left' : 'right'), vertical: 'middle' };
+    }
+  }
+
+  ws.views = [{ state: 'frozen', ySplit: 4, showGridLines: false }];
+
+  var buf = await wb.xlsx.writeBuffer();
+  var blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  var fileLabel = (bulanKeys.length === 1)
+    ? (BULAN_ID[parseInt(bulanKeys[0].slice(5,7),10)-1] + '_' + tahunUtama)
+    : ('Periode_' + firstIso + '_sd_' + normalizeDate(txns[txns.length-1].date));
   var a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = filename; a.click();
-}
-function exportTxn() {
-  var b = banks[currentBankId]; if (!b||!b.mutasi) return;
-  var rows = b.mutasi.transactions.map(function(t){
-    var nk = noteKey(currentBankId,t.date,t.desc,t.debit,t.credit,t.txnId);
-    return [t.date,t.desc,t.debit,t.credit,t.balance,t.type,notes[nk]||''];
-  });
-  downloadCSV(toCSV(rows,['Tanggal','Keterangan','Debet','Kredit','Saldo','Tipe','Catatan']), b.name+'_transaksi.csv');
+  a.download = b.name + '_' + fileLabel + '.xlsx';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  showToast('Export Excel berhasil.', 'success');
 }
 
 // ============================================================
