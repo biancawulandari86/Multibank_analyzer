@@ -4393,31 +4393,33 @@ async function exportTxn() {
   // ── Bangun workbook ──
   var wb = new ExcelJS.Workbook();
   var ws = wb.addWorksheet('Mutasi', { views: [{ showGridLines: false }] });
-  ws.columns = [{ width: 16 }, { width: 52 }, { width: 22 }, { width: 22 }];
+  ws.columns = [{ width: 16 }, { width: 48 }, { width: 30 }, { width: 22 }, { width: 22 }];
 
   var thin = { style: 'thin', color: { argb: 'FF000000' } };
   var allBorder = { top: thin, left: thin, bottom: thin, right: thin };
   var fmtRp = '"Rp" #,##0.00';
 
-  ws.mergeCells('A1:D1');
+  ws.mergeCells('A1:E1');
   var c1 = ws.getCell('A1');
   c1.value = judul; c1.font = { bold: true, size: 14 }; c1.alignment = { horizontal: 'center', vertical: 'middle' };
   ws.getRow(1).height = 22;
 
-  ws.mergeCells('A2:D2');
+  ws.mergeCells('A2:E2');
   var c2 = ws.getCell('A2');
   c2.value = subjudul; c2.font = { bold: true, size: 12 }; c2.alignment = { horizontal: 'center', vertical: 'middle' };
   ws.getRow(2).height = 20;
 
   ws.mergeCells('A3:A4');
   ws.mergeCells('B3:B4');
-  ws.mergeCells('C3:D3');
+  ws.mergeCells('C3:C4');
+  ws.mergeCells('D3:E3');
   ws.getCell('A3').value = 'Tanggal';
   ws.getCell('B3').value = 'Keterangan';
-  ws.getCell('C3').value = 'Jenis Transaksi';
-  ws.getCell('C4').value = 'KREDIT';
-  ws.getCell('D4').value = 'DEBET';
-  ['A3','B3','C3','A4','B4','C4','D4'].forEach(function(addr){
+  ws.getCell('C3').value = 'Catatan';
+  ws.getCell('D3').value = 'Jenis Transaksi';
+  ws.getCell('D4').value = 'KREDIT';
+  ws.getCell('E4').value = 'DEBET';
+  ['A3','B3','C3','D3','A4','B4','C4','D4','E4'].forEach(function(addr){
     var cell = ws.getCell(addr);
     cell.font = { bold: true };
     cell.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -4432,8 +4434,8 @@ async function exportTxn() {
   saldoRow.getCell(2).value = 'SALDO AWAL';
   saldoRow.getCell(2).font = { bold: true };
   if (saldoAwalVal) {
-    saldoRow.getCell(3).value = saldoAwalVal;
-    saldoRow.getCell(3).numFmt = fmtRp;
+    saldoRow.getCell(4).value = saldoAwalVal;
+    saldoRow.getCell(4).numFmt = fmtRp;
   }
   rIdx++;
 
@@ -4441,16 +4443,18 @@ async function exportTxn() {
     var row = ws.getRow(rIdx);
     row.getCell(1).value = formatTanggalID(t.date);
     row.getCell(2).value = t.desc || '';
-    if (t.credit > 0) { row.getCell(3).value = t.credit; row.getCell(3).numFmt = fmtRp; }
-    if (t.debit  > 0) { row.getCell(4).value = t.debit;  row.getCell(4).numFmt = fmtRp; }
+    var nk = noteKey(currentBankId, t.date, t.desc, t.debit, t.credit, t.txnId);
+    row.getCell(3).value = notes[nk] || '';
+    if (t.credit > 0) { row.getCell(4).value = t.credit; row.getCell(4).numFmt = fmtRp; }
+    if (t.debit  > 0) { row.getCell(5).value = t.debit;  row.getCell(5).numFmt = fmtRp; }
     rIdx++;
   });
 
   for (var r = startRow; r < rIdx; r++) {
-    for (var c = 1; c <= 4; c++) {
+    for (var c = 1; c <= 5; c++) {
       var cell = ws.getCell(r, c);
       cell.border = allBorder;
-      cell.alignment = { horizontal: (c <= 2 ? 'left' : 'right'), vertical: 'middle' };
+      cell.alignment = { horizontal: (c <= 3 ? 'left' : 'right'), vertical: 'middle' };
     }
   }
 
