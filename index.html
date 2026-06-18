@@ -1429,7 +1429,6 @@ function gasCall(funcName, args, onSuccess, onFailure) {
           <button class="btn-sm" id="btn-paste-excel" onclick="openPasteModal()" style="display:none">📋 Paste Excel</button>
           <button class="btn-sm primary" id="btn-save-gsheet" onclick="saveBankToGSheet()" style="display:none">💾 Simpan ke GSheet</button>
           <button class="btn-sm" id="btn-auto-koreksi" onclick="jalankanAutoKoreksi()" title="Perbaiki nilai desimal yang salah format di GSheet">🔧 Koreksi Desimal</button>
-          <button class="btn-sm" id="btn-auto-koreksi-saldo" onclick="jalankanAutoKoreksiSaldo()" title="Hitung ulang kolom Saldo dari Debet/Kredit, tanpa perlu input saldo awal">💰 Koreksi Saldo</button>
           <button class="btn-sm" onclick="openEditBankModal()">✏ Edit Bank</button>
           <button class="btn-sm danger" onclick="deleteCurrentBank()">🗑 Hapus</button>
           <button class="btn-sm" onclick="showDashboard()">← Dashboard</button>
@@ -2771,45 +2770,6 @@ function _doAutoKoreksi(bankName) {
       // Update timestamp referensi autoload agar tidak trigger reload ulang
       _initSyncTimestamp();
       // Reload data bank dari GSheet setelah koreksi
-      if (typeof loadBankDetail === 'function') loadBankDetail(currentBankId);
-    } else {
-      showToast('Gagal: ' + (result && result.error ? result.error : 'Unknown error'), 'error');
-    }
-  }, function(err) {
-    _savingInProgress = Math.max(0, _savingInProgress - 1);
-    showToast('Error: ' + err.message, 'error');
-  });
-}
-
-// ============================================================
-// AUTO KOREKSI SALDO BERJALAN — Hitung ulang Saldo dari Debet/Kredit
-// Tidak perlu input saldo awal: baris pertama yang sudah ada di sheet
-// dipakai sebagai jangkar, baris berikutnya dihitung ulang.
-// ============================================================
-function jalankanAutoKoreksiSaldo() {
-  if (!currentBankId) { showToast('Pilih bank terlebih dahulu.', 'error'); return; }
-  var b = banks[currentBankId];
-  var bankName = b ? b.name : '';
-  showConfirm({
-    icon: '💰',
-    title: 'Auto Koreksi Saldo Berjalan',
-    msg: 'Fitur ini akan menghitung ulang kolom Saldo untuk bank "' + bankName + '" berdasarkan Debet/Kredit setiap baris.\n\nBaris PERTAMA dipakai sebagai acuan (dianggap benar) dan TIDAK diubah — baris-baris setelahnya akan dikoreksi mengikuti rumus: saldo sebelumnya − Debet + Kredit.\n\nPastikan baris pertama di sheet sudah benar sebelum melanjutkan.\n\nLanjutkan?',
-    okLabel: 'Ya, Koreksi Sekarang', okClass: 'primary',
-    onOk: function() { _doAutoKoreksiSaldo(bankName); }
-  });
-}
-function _doAutoKoreksiSaldo(bankName) {
-  showToast('Menjalankan koreksi saldo...', 'info');
-  _savingInProgress++;
-  gasCall('autoKoreksiSaldoBerjalan', [bankName], function(result) {
-    _savingInProgress = Math.max(0, _savingInProgress - 1);
-    if (result && result.success) {
-      var msg = 'Koreksi saldo selesai! ' + result.totalFixed + ' baris diperbaiki.';
-      if (result.sheets && result.sheets.length > 0) {
-        msg += '\n• ' + result.sheets.map(function(s){ return s.sheet + ': ' + s.fixed + '/' + s.total + (s.skipped ? ' (' + s.skipped + ')' : ''); }).join('\n• ');
-      }
-      showToast(msg, 'success');
-      _initSyncTimestamp();
       if (typeof loadBankDetail === 'function') loadBankDetail(currentBankId);
     } else {
       showToast('Gagal: ' + (result && result.error ? result.error : 'Unknown error'), 'error');
