@@ -1050,7 +1050,7 @@ body.mode-hp #btn-hamburger { display: flex !important; }
      ============================================================ -->
 <script>
 // ── KONFIGURASI — isi URL GAS Web App kamu di sini ──
-var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbwbuO_kgXoAHdK21k-7bc1Cze6n1-0PE9Ysr9D09T8bQK4PEEFLrOZFe8CqJvbKNhUf/exec';
+var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbx1dHce-fRHITQ2lxyDrMf3WnuOnPrmIdt9P8eVfnwZzf0rgFXqiC6h2udeCdgfOqkF/exec';
 
 // ── Bridge: gasCall(funcName, args, onSuccess, onFailure) ──
 // Meniru perilaku gasCall('funcName', [], , function(e){ console.error(e); })
@@ -1428,7 +1428,6 @@ function gasCall(funcName, args, onSuccess, onFailure) {
           <button class="btn-sm" id="btn-input-manual" onclick="openAddTxnModal()" style="display:none">✏ Input Manual</button>
           <button class="btn-sm" id="btn-paste-excel" onclick="openPasteModal()" style="display:none">📋 Paste Excel</button>
           <button class="btn-sm primary" id="btn-save-gsheet" onclick="saveBankToGSheet()" style="display:none">💾 Simpan ke GSheet</button>
-          <button class="btn-sm" id="btn-auto-koreksi" onclick="jalankanAutoKoreksi()" title="Perbaiki nilai desimal yang salah format di GSheet">🔧 Koreksi Desimal</button>
           <button class="btn-sm" onclick="openEditBankModal()">✏ Edit Bank</button>
           <button class="btn-sm danger" onclick="deleteCurrentBank()">🗑 Hapus</button>
           <button class="btn-sm" onclick="showDashboard()">← Dashboard</button>
@@ -2741,46 +2740,6 @@ function _doDeleteCurrentBank() {
 }
 
 // ============================================================
-// AUTO KOREKSI DESIMAL — Perbaiki nilai angka di GSheet
-// ============================================================
-function jalankanAutoKoreksi() {
-  if (!currentBankId) { showToast('Pilih bank terlebih dahulu.', 'error'); return; }
-  var b = banks[currentBankId];
-  var bankName = b ? b.name : '';
-  showConfirm({
-    icon: '🔧',
-    title: 'Auto Koreksi Desimal',
-    msg: 'Fitur ini akan memperbaiki kolom Saldo di GSheet untuk bank "' + bankName + '" — nilai yang salah format seperti 1.500 akan dikoreksi jadi 1500.\n\nKolom Debet dan Kredit tidak akan diubah.\n\nLanjutkan?',
-    okLabel: 'Ya, Koreksi Sekarang', okClass: 'primary',
-    onOk: function() { _doAutoKoreksi(bankName); }
-  });
-}
-function _doAutoKoreksi(bankName) {
-  showToast('Menjalankan koreksi desimal...', 'info');
-  // Pause autoload selama koreksi berlangsung agar tidak bentrok
-  _savingInProgress++;
-  gasCall('autoKoreksiDesimal', [bankName], function(result) {
-    _savingInProgress = Math.max(0, _savingInProgress - 1);
-    if (result && result.success) {
-      var msg = 'Koreksi selesai! ' + result.totalFixed + ' baris diperbaiki.';
-      if (result.sheets && result.sheets.length > 0) {
-        msg += '\n• ' + result.sheets.map(function(s){ return s.sheet + ': ' + s.fixed + '/' + s.total; }).join('\n• ');
-      }
-      showToast(msg, 'success');
-      // Update timestamp referensi autoload agar tidak trigger reload ulang
-      _initSyncTimestamp();
-      // Reload data bank dari GSheet setelah koreksi
-      if (typeof loadBankDetail === 'function') loadBankDetail(currentBankId);
-    } else {
-      showToast('Gagal: ' + (result && result.error ? result.error : 'Unknown error'), 'error');
-    }
-  }, function(err) {
-    _savingInProgress = Math.max(0, _savingInProgress - 1);
-    showToast('Error: ' + err.message, 'error');
-  });
-}
-
-// ============================================================
 // MODAL: UPLOAD CSV
 // ============================================================
 function openUploadModal() {
@@ -3843,15 +3802,6 @@ function clientProcessCSV(csvText, bankType) {
       else if(isCR) credit=amt;
       else { var du=desc.toUpperCase(); if(/ DB /.test(du)||/^DB /.test(du)) debit=amt; else credit=amt; }
       if(amt===0){skipped++;continue;}
-      // ── FIX v4.1: Koreksi berbasis saldo (BCA) ──
-      if(!isPend&&balance>0&&transactions.length>0){
-        var prevBal=transactions[transactions.length-1].balance;
-        if(prevBal>0){
-          var diff=balance-prevBal;
-          if(diff<0&&credit>0&&debit===0){debit=credit;credit=0;}
-          else if(diff>0&&debit>0&&credit===0){credit=debit;debit=0;}
-        }
-      }
       transactions.push({date:d,dateKey:isPend?'PEND':(d?dateKey(d):''),monthKey:isPend?'PEND':(d?monthKey(d):''),desc:desc,debit:debit,credit:credit,balance:balance,type:(debit>0?'DB':'CR'),txnId:'t'+i+'_'+Math.random().toString(36).slice(2,6),isPending:isPend?true:undefined});
     }
     if(!transactions.length) return{error:'Tidak ada transaksi yang terbaca dari file BCA.'};
@@ -3929,14 +3879,6 @@ function clientProcessCSV(csvText, bankType) {
       for(var c=colAmount+1;c<row.length;c++){var v=(row[c]||'').trim().toUpperCase();if(v==='CR'||v==='DB'){typeStr=v;break;}}
       if(!typeStr){typeStr=/ db /i.test(' '+desc+' ')?'DB':'CR';}
       var debit=typeStr==='DB'?amt:0, credit=typeStr==='CR'?amt:0;
-      // Koreksi berbasis saldo
-      if(balance>0&&transactions.length>0){
-        var prevBal=transactions[transactions.length-1].balance;
-        if(prevBal>0){var diff=balance-prevBal;
-          if(diff<0&&credit>0&&debit===0){debit=credit;credit=0;}
-          else if(diff>0&&debit>0&&credit===0){credit=debit;debit=0;}
-        }
-      }
       if(amt===0){skipped++;continue;}
       transactions.push({date:d,dateKey:isPend?'PEND':(d?dateKey(d):''),monthKey:isPend?'PEND':(d?monthKey(d):''),desc:desc,debit:debit,credit:credit,balance:balance,type:(debit>0?'DB':'CR'),txnId:'bca_'+i+'_'+Math.random().toString(36).slice(2,6),isPending:isPend?true:undefined});
     }
@@ -3986,15 +3928,6 @@ function clientProcessCSV(csvText, bankType) {
     else if(mapping.amount!==-1&&mapping.type!==-1){var amt=cleanNumber(row[mapping.amount]||'');var type=cleanField(row[mapping.type]||'').toUpperCase().trim();if(type==='CR'||type==='K'||type==='KREDIT')credit=amt;else if(type==='DB'||type==='D'||type==='DEBET'||type==='DEBIT')debit=amt;else{var kw=desc.toUpperCase();if(kw.indexOf('CR ')!==-1||kw.indexOf('KREDIT')!==-1)credit=amt;else debit=amt;}}
     else if(mapping.amount!==-1){var rawAmt=cleanField(row[mapping.amount]||'');var numAmt=parseFloat(rawAmt.replace(/[^\d.\-]/g,''));if(numAmt<0)debit=Math.abs(numAmt);else credit=Math.abs(numAmt);}
     else{for(var c=0;c<row.length;c++){if(c===mapping.date||c===mapping.desc||c===mapping.balance||c===mapping.type)continue;var v=cleanNumber(row[c]||'');if(v>0){credit=v;break;}}}
-    // ── FIX v4.1: Koreksi debit/kredit berbasis perubahan saldo ──
-    if(balance>0&&transactions.length>0){
-      var prevBal=transactions[transactions.length-1].balance;
-      if(prevBal>0){
-        var diff=balance-prevBal;
-        if(diff<0&&credit>0&&debit===0){debit=credit;credit=0;}
-        else if(diff>0&&debit>0&&credit===0){credit=debit;debit=0;}
-      }
-    }
     if(debit===0&&credit===0&&mapping.amount!==-1){
       var fbAmt=cleanNumber(row[mapping.amount]||'');
       if(fbAmt>0) debit=fbAmt;
