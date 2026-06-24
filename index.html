@@ -1050,7 +1050,7 @@ body.mode-hp #btn-hamburger { display: flex !important; }
      ============================================================ -->
 <script>
 // ── KONFIGURASI — isi URL GAS Web App kamu di sini ──
-var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbx1dHce-fRHITQ2lxyDrMf3WnuOnPrmIdt9P8eVfnwZzf0rgFXqiC6h2udeCdgfOqkF/exec';
+var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbxDeHlsgxgsjXiTTBY-Ywi8Sxr2ol7kBPNUoXUcTGLgnF4FkD-kdH8AC_yHOnY7nY4N/exec';
 
 // ── Bridge: gasCall(funcName, args, onSuccess, onFailure) ──
 // Meniru perilaku gasCall('funcName', [], , function(e){ console.error(e); })
@@ -1769,6 +1769,9 @@ function gasCall(funcName, args, onSuccess, onFailure) {
       <div style="padding:14px 20px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--border);line-height:1.7">
         Transaksi berikut memiliki tanggal <strong style="color:var(--amber)">PEND</strong> (pending/belum settle).<br>
         Pilih tanggal yang sesuai agar transaksi ini bisa tersimpan dengan benar.
+        <div style="margin-top:8px;padding:8px 10px;background:var(--green-dim);border-left:3px solid var(--green);border-radius:4px;color:var(--text);font-size:11.5px;line-height:1.6">
+          <strong style="color:var(--green)">✓ Koreksi otomatis aktif:</strong> Saat klik <em>Simpan</em>, sistem akan memeriksa arah <strong>Debit/Kredit</strong> setiap transaksi PEND berdasarkan perubahan saldo. Jika saldo naik → otomatis jadi <strong style="color:var(--green)">Kredit</strong>; jika saldo turun → otomatis jadi <strong style="color:var(--red)">Debit</strong>. Transaksi yang dikoreksi akan diberi badge <span style="color:var(--green)">✓ dikoreksi</span> di tabel mutasi.
+        </div>
       </div>
       <!-- Apply semua sekaligus -->
       <div class="pend-apply-all">
@@ -4034,6 +4037,133 @@ function skipAllPendAndSave() {
   _continueConfirmUpload();
 }
 
+// ============================================================
+// KOREKSI OTOMATIS DEBIT/KREDIT BERBASIS SALDO UNTUK PEND
+// ============================================================
+// Masalah: Banyak baris PEND di CSV BCA/Mandiri tidak punya kolom DB/CR
+// yang jelas, sehingga parser salah menebak arah (seharusnya CR malah jadi
+// DB). Fungsi ini memakai field `balance` (saldo akhir) untuk verifikasi:
+//   - saldo NAIK  → CR (uang masuk)
+//   - saldo TURUN → DB (uang keluar)
+// Jika arah saat ini tidak konsisten dengan arah saldo, SWAP debit↔credit.
+// Berjalan otomatis di confirmPendAndSave() sebelum PEND dimasukkan ke
+// transactions. Aman: jika saldo 0 / tidak ada, fallback ke keyword desc.
+// ============================================================
+function _correctPendDirectionByBalance(pendTxns, normalTxns) {
+  if (!pendTxns || !pendTxns.length) return 0;
+  var correctedCount = 0;
+
+  // Salin & sort normal txns by date asc (string YYYY-MM-DD sudah sort-friendly).
+  // PEND ('PEND' string) di-exclude.
+  var sortedNormal = [];
+  if (normalTxns && normalTxns.length) {
+    sortedNormal = normalTxns.slice().sort(function(a, b) {
+      var da = a.date || a.dateKey || '';
+      var db = b.date || b.dateKey || '';
+      if (da === 'PEND') return 1;
+      if (db === 'PEND') return -1;
+      return da < db ? -1 : da > db ? 1 : 0;
+    });
+  }
+
+  // Sort PEND txns by chosenDate asc agar chaining pada tanggal yang sama benar.
+  var sortedPend = pendTxns.slice().sort(function(a, b) {
+    return a.chosenDate < b.chosenDate ? -1 : a.chosenDate > b.chosenDate ? 1 : 0;
+  });
+
+  // State untuk chaining multiple PEND pada tanggal yang sama
+  var runningBalance = null;
+  var lastChosenDate = null;
+
+  sortedPend.forEach(function(t) {
+    var amt = (t.debit > 0) ? t.debit : (t.credit > 0 ? t.credit : 0);
+    if (amt <= 0) return; // tidak ada nominal → skip
+
+    var hasBalance = (t.balance && t.balance > 0);
+
+    // 1) Tentukan prevBalance (saldo tepat sebelum transaksi PEND ini)
+    var prevBalance = null;
+    if (lastChosenDate === t.chosenDate && runningBalance !== null) {
+      // Ada PEND sebelumnya pada tanggal yang sama → pakai running balance
+      prevBalance = runningBalance;
+    } else {
+      // Cari normal txn terakhir dengan date <= chosenDate
+      for (var i = sortedNormal.length - 1; i >= 0; i--) {
+        var nDate = sortedNormal[i].date || sortedNormal[i].dateKey || '';
+        if (nDate !== 'PEND' && nDate <= t.chosenDate) {
+          prevBalance = sortedNormal[i].balance || 0;
+          break;
+        }
+      }
+      // Fallback: jika tidak ada normal txn sebelum chosenDate, pakai saldo awal
+      if (prevBalance === null) {
+        prevBalance = (sortedNormal.length ? (sortedNormal[0].balance || 0) : 0);
+      }
+    }
+
+    var currentIsDebit = (t.debit > 0);
+
+    // 2) Cek apakah debit/kredit saat ini konsisten dengan saldo tercatat
+    if (hasBalance && prevBalance !== null) {
+      var expectedIfCredit = prevBalance + amt; // CR  → saldo naik
+      var expectedIfDebit  = prevBalance - amt; // DB  → saldo turun
+
+      var matchesCredit = Math.abs(expectedIfCredit - t.balance) < 1;
+      var matchesDebit  = Math.abs(expectedIfDebit  - t.balance) < 1;
+
+      if (matchesCredit && !matchesDebit && currentIsDebit) {
+        // Harusnya CR, tapi saat ini DB → SWAP
+        t.debit = 0; t.credit = amt; t.type = 'CR';
+        t._autoCorrected = true;
+        correctedCount++;
+      } else if (matchesDebit && !matchesCredit && !currentIsDebit) {
+        // Harusnya DB, tapi saat ini CR → SWAP
+        t.credit = 0; t.debit = amt; t.type = 'DB';
+        t._autoCorrected = true;
+        correctedCount++;
+      } else if (!matchesCredit && !matchesDebit) {
+        // Tidak ada yang persis cocok (mungkin karena ada PEND lain di tanggal sama
+        // atau ada biaya admin yang ikut). Pakai heuristik arah saldo.
+        if (t.balance > prevBalance && currentIsDebit) {
+          t.debit = 0; t.credit = amt; t.type = 'CR';
+          t._autoCorrected = true;
+          correctedCount++;
+        } else if (t.balance < prevBalance && !currentIsDebit) {
+          t.credit = 0; t.debit = amt; t.type = 'DB';
+          t._autoCorrected = true;
+          correctedCount++;
+        }
+      }
+    } else {
+      // 3) Fallback: tidak ada saldo → pakai keyword di desc
+      var d = (t.desc || '').toUpperCase();
+      var looksCredit = /(CR\b|KREDIT|MASUK|TRSF.*IN|BI-FAST.*CR|SETOR|PINDAH BUKU.*MASUK|TERIMA|PENERIMAAN|DEPOSIT)/.test(d);
+      var looksDebit  = /(DB\b|DEBET|DEBIT|KELUAR|TRSF.*OUT|BI-FAST.*DB|TARIK|PINDAH BUKU.*KELUAR|BAYAR|PEMBAYARAN|PURCHASE|SWITCHING|TF KE|ADMIN|BIAYA)/.test(d);
+      if (looksCredit && !looksDebit && currentIsDebit) {
+        t.debit = 0; t.credit = amt; t.type = 'CR';
+        t._autoCorrected = true;
+        correctedCount++;
+      } else if (looksDebit && !looksCredit && !currentIsDebit) {
+        t.credit = 0; t.debit = amt; t.type = 'DB';
+        t._autoCorrected = true;
+        correctedCount++;
+      }
+    }
+
+    // 4) Update running balance untuk PEND berikutnya pada tanggal yang sama
+    if (hasBalance) {
+      runningBalance = t.balance;
+    } else if (t.type === 'CR') {
+      runningBalance = (prevBalance || 0) + amt;
+    } else {
+      runningBalance = (prevBalance || 0) - amt;
+    }
+    lastChosenDate = t.chosenDate;
+  });
+
+  return correctedCount;
+}
+
 function confirmPendAndSave() {
   // Validasi: semua harus punya tanggal
   var unset = _pendTxns.filter(function(t){ return !t.chosenDate; });
@@ -4041,6 +4171,17 @@ function confirmPendAndSave() {
     showToast(unset.length + ' transaksi PEND belum diisi tanggal.', 'warn');
     return;
   }
+
+  // ── KOREKSI OTOMATIS DEBIT/KREDIT BERBASIS SALDO ──
+  // Bandingkan saldo PEND dengan saldo transaksi normal terdekat sebelum tanggal
+  // yang dipilih. Jika arah debit/kredit tidak konsisten dengan arah perubahan
+  // saldo, SWAP agar transaksi tidak salah masuk kolom.
+  var existingNormal = (pendingCSVData && pendingCSVData.transactions) ? pendingCSVData.transactions : [];
+  var nCorrected = _correctPendDirectionByBalance(_pendTxns, existingNormal);
+  if (nCorrected > 0) {
+    showToast('✓ ' + nCorrected + ' transaksi PEND dikoreksi otomatis (debit/kredit disesuaikan dengan saldo).', 'success');
+  }
+
   // Masukkan transaksi PEND ke transactions dengan tanggal yang dipilih
   if (pendingCSVData) {
     _pendTxns.forEach(function(t) {
@@ -4052,7 +4193,8 @@ function confirmPendAndSave() {
         balance: t.balance,
         type: t.type,
         txnId: t.txnId,
-        wasPending: true
+        wasPending: true,
+        autoCorrected: t._autoCorrected ? true : undefined
       });
     });
     // Sort ulang
