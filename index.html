@@ -1050,7 +1050,7 @@ body.mode-hp #btn-hamburger { display: flex !important; }
      ============================================================ -->
 <script>
 // ── KONFIGURASI — isi URL GAS Web App kamu di sini ──
-var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbxDeHlsgxgsjXiTTBY-Ywi8Sxr2ol7kBPNUoXUcTGLgnF4FkD-kdH8AC_yHOnY7nY4N/exec';
+var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbywSsN3d5BBfUk6uw6HNUaFJe5jzAZQCjdusAlX03OfhMAUx6fDFNhM07-m1AlJgEVX/exec';
 
 // ── Bridge: gasCall(funcName, args, onSuccess, onFailure) ──
 // Meniru perilaku gasCall('funcName', [], , function(e){ console.error(e); })
@@ -1570,6 +1570,9 @@ function gasCall(funcName, args, onSuccess, onFailure) {
       <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">
         Bank: <strong id="upload-bank-label" style="color:var(--text)"></strong>
       </div>
+      <div style="padding:8px 12px;background:var(--accent-glow);border-left:3px solid var(--accent);border-radius:4px;font-size:11.5px;color:var(--text);line-height:1.55;margin-bottom:12px;">
+        <strong style="color:var(--accent)">🔒 Preservasi Excel v4.4:</strong> Saat import, <strong>semua</strong> transaksi dipertahankan persis seperti di file CSV/Excel. Debit/Kredit <strong>tidak akan ditukar</strong> otomatis. Sheet = Excel asli.
+      </div>
       <div class="form-group" style="margin-bottom:14px;">
         <label class="form-label" style="font-size:11px;text-transform:uppercase;letter-spacing:0.8px;color:var(--muted);margin-bottom:6px;display:block;">Jenis Format Bank</label>
         <select class="form-select" id="upload-bank-type" style="width:100%;background:var(--surface2);border:1px solid var(--border2);color:var(--text);padding:8px 12px;border-radius:var(--r-sm);font-size:13px;">
@@ -1769,8 +1772,8 @@ function gasCall(funcName, args, onSuccess, onFailure) {
       <div style="padding:14px 20px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--border);line-height:1.7">
         Transaksi berikut memiliki tanggal <strong style="color:var(--amber)">PEND</strong> (pending/belum settle).<br>
         Pilih tanggal yang sesuai agar transaksi ini bisa tersimpan dengan benar.
-        <div style="margin-top:8px;padding:8px 10px;background:var(--green-dim);border-left:3px solid var(--green);border-radius:4px;color:var(--text);font-size:11.5px;line-height:1.6">
-          <strong style="color:var(--green)">✓ Koreksi otomatis aktif:</strong> Saat klik <em>Simpan</em>, sistem akan memeriksa arah <strong>Debit/Kredit</strong> setiap transaksi PEND berdasarkan perubahan saldo. Jika saldo naik → otomatis jadi <strong style="color:var(--green)">Kredit</strong>; jika saldo turun → otomatis jadi <strong style="color:var(--red)">Debit</strong>. Transaksi yang dikoreksi akan diberi badge <span style="color:var(--green)">✓ dikoreksi</span> di tabel mutasi.
+        <div style="margin-top:8px;padding:8px 10px;background:var(--accent-glow);border-left:3px solid var(--accent);border-radius:4px;color:var(--text);font-size:11.5px;line-height:1.6">
+          <strong style="color:var(--accent)">🔒 Mode Preservasi Excel v4.4:</strong> <strong>Semua transaksi</strong> (PEND &amp; normal) dipertahankan <strong>persis seperti di file Excel/CSV</strong> saat import. <strong>Tidak ada koreksi/swap DB&harr;CR otomatis</strong> sama sekali. Debit di Excel = Debit di sheet. Kredit di Excel = Kredit di sheet. Mutlak.
         </div>
       </div>
       <!-- Apply semua sekaligus -->
@@ -3769,18 +3772,32 @@ function clientProcessCSV(csvText, bankType) {
     if(text.charCodeAt(0)===0xFEFF) text=text.slice(1);
     var lines=text.split('\n');
     var transactions=[],skipped=0;
-    var dataStartIdx=-1,colTanggal=0,colKeterangan=1,colJumlah=3,colSaldo=4;
+    var dataStartIdx=-1,colTanggal=0,colKeterangan=1,colJumlah=3,colSaldo=4,colType=-1;
     for(var i=0;i<lines.length;i++){
       var row=parseCSVLine(lines[i].replace(/\r$/,''));
       var firstCell=(row[0]||'').toLowerCase().replace(/[^a-z]/g,'');
       if(firstCell==='tanggaltransaksi'||firstCell==='tanggal'){
         for(var c=0;c<row.length;c++){
-          var h=(row[c]||'').toLowerCase().replace(/[^a-z]/g,'');
+          var h=(row[c]||'').toLowerCase().replace(/[^a-z\/]/g,'');
           if(h==='tanggaltransaksi'||h==='tanggal') colTanggal=c;
           else if(h==='keterangan'||h==='desc'||h==='uraian') colKeterangan=c;
           else if(h==='jumlah'||h==='nominal'||h==='amount') colJumlah=c;
           else if(h==='saldo'||h==='balance') colSaldo=c;
+          else if(h==='dbcr'||h==='crdb'||h==='type'||h==='jenis'||h==='dc') colType=c;
         }
+        // Deteksi kolom kosong antara Jumlah dan Saldo sebagai kolom DB/CR
+        // Format CSV BCA: Tanggal | Keterangan | Cabang | Jumlah | DB/CR | Saldo
+        if(colType===-1 && colJumlah!==-1){
+          var nextCol=colJumlah+1;
+          if(nextCol<row.length && (row[nextCol]||'').trim()===''){
+            colType=nextCol;
+          }
+        }
+        // Default fallback jika tidak ditemukan
+        if(colTanggal===-1) colTanggal=0;
+        if(colKeterangan===-1) colKeterangan=1;
+        if(colJumlah===-1) colJumlah=3;
+        if(colSaldo===-1) colSaldo=(colType!==-1)?colType+1:4;
         dataStartIdx=i+1; break;
       }
     }
@@ -3799,13 +3816,37 @@ function clientProcessCSV(csvText, bankType) {
       var jumlahRaw=cleanField(row[colJumlah]||'');
       var jumlahUpper=jumlahRaw.toUpperCase();
       var isDB=/\bDB\b/.test(jumlahUpper), isCR=/\bCR\b/.test(jumlahUpper);
+      // Cek kolom DB/CR terpisah (format BCA: kolom ke-4 berisi "DB" atau "CR")
+      var hasExplicitDBCR=false;
+      if(!isDB && !isCR && colType!==-1){
+        var typeVal=cleanField(row[colType]||'').toUpperCase();
+        if(typeVal==='DB'){ isDB=true; hasExplicitDBCR=true; }
+        else if(typeVal==='CR'){ isCR=true; hasExplicitDBCR=true; }
+      } else if(isDB||isCR){
+        hasExplicitDBCR=true;
+      }
       var amt=cleanNumber(jumlahRaw.replace(/\s*(DB|CR)\s*$/i,'').trim());
       var debit=0,credit=0;
       if(isDB) debit=amt;
       else if(isCR) credit=amt;
-      else { var du=desc.toUpperCase(); if(/ DB /.test(du)||/^DB /.test(du)) debit=amt; else credit=amt; }
+      else {
+        // Fallback: deteksi dari keyword desc
+        var du=desc.toUpperCase();
+        if(/ DB /.test(du)||/^DB /.test(du)||/\bDB\b/.test(du)){
+          debit=amt; hasExplicitDBCR=true;
+        } else if(/ CR /.test(du)||/^CR /.test(du)||/\bCR\b/.test(du)||/KREDIT/.test(du)||/MASUK|TRSF.*IN|SETOR|TERIMA|PENERIMAAN|DEPOSIT/.test(du)){
+          credit=amt; hasExplicitDBCR=true;
+        } else if(/KELUAR|TRSF.*OUT|TARIK|BAYAR|PEMBAYARAN|PURCHASE|SWITCHING|TF KE|ADMIN|BIAYA|PAJAK/.test(du)){
+          debit=amt; hasExplicitDBCR=true;
+        } else {
+          // Tidak ada indikator sama sekali — default ke DEBIT (lebih konservatif
+          // untuk preservasi Excel: kebanyakan transaksi "tanpa tanda" di mutasi
+          // bank adalah pengeluaran). Bisa di-edit manual setelah import.
+          debit=amt;
+        }
+      }
       if(amt===0){skipped++;continue;}
-      transactions.push({date:d,dateKey:isPend?'PEND':(d?dateKey(d):''),monthKey:isPend?'PEND':(d?monthKey(d):''),desc:desc,debit:debit,credit:credit,balance:balance,type:(debit>0?'DB':'CR'),txnId:'t'+i+'_'+Math.random().toString(36).slice(2,6),isPending:isPend?true:undefined});
+      transactions.push({date:d,dateKey:isPend?'PEND':(d?dateKey(d):''),monthKey:isPend?'PEND':(d?monthKey(d):''),desc:desc,debit:debit,credit:credit,balance:balance,type:(debit>0?'DB':'CR'),hasExplicitDBCR:hasExplicitDBCR,txnId:'t'+i+'_'+Math.random().toString(36).slice(2,6),isPending:isPend?true:undefined});
     }
     if(!transactions.length) return{error:'Tidak ada transaksi yang terbaca dari file BCA.'};
     // Sort: PEND di akhir, yang lain berdasarkan date
@@ -3822,10 +3863,10 @@ function clientProcessCSV(csvText, bankType) {
     var fn=normalTxns.length?normalTxns[0]:null, ln=normalTxns.length?normalTxns[normalTxns.length-1]:null;
     return{
       success:true,bankInfo:{bankType:'BCA'},
-      pendingTransactions:pendTxns.length?pendTxns.map(function(t){return{date:"PEND",desc:t.desc,debit:t.debit,credit:t.credit,balance:t.balance,type:t.type,txnId:t.txnId,isPending:true};}):undefined,
+      pendingTransactions:pendTxns.length?pendTxns.map(function(t){return{date:"PEND",desc:t.desc,debit:t.debit,credit:t.credit,balance:t.balance,type:t.type,hasExplicitDBCR:!!t.hasExplicitDBCR,txnId:t.txnId,isPending:true};}):undefined,
       summary:{totalTransactions:transactions.length,totalDebit:totalDebit,totalCredit:totalCredit,netFlow:totalCredit-totalDebit,firstDate:fn?fn.dateKey:(pendTxns.length?'PEND':''),lastDate:ln?ln.dateKey:(pendTxns.length?'PEND':''),firstBalance:fn?fn.balance:0,lastBalance:ln?ln.balance:(pendTxns.length?pendTxns[pendTxns.length-1].balance:0),activeDays:0,activeMonths:0,skipped:skipped,pendingCount:pendTxns.length},
       daily:[],monthly:[],
-      transactions:normalTxns.map(function(t){return{date:t.dateKey,desc:t.desc,debit:t.debit,credit:t.credit,balance:t.balance,type:t.type,txnId:t.txnId};}),
+      transactions:normalTxns.map(function(t){return{date:t.dateKey,desc:t.desc,debit:t.debit,credit:t.credit,balance:t.balance,type:t.type,hasExplicitDBCR:!!t.hasExplicitDBCR,txnId:t.txnId};}),
       topDebit:[],topCredit:[],
       headers:['Tanggal','Keterangan','Debet','Kredit','Saldo'],mapping:{date:0,desc:1,debit:2,credit:3,balance:4}
     };
@@ -3880,10 +3921,11 @@ function clientProcessCSV(csvText, bankType) {
       // Cari tipe CR/DB di kolom antara amount dan balance
       var typeStr='';
       for(var c=colAmount+1;c<row.length;c++){var v=(row[c]||'').trim().toUpperCase();if(v==='CR'||v==='DB'){typeStr=v;break;}}
+      var hasExplicitDBCR = !!typeStr;
       if(!typeStr){typeStr=/ db /i.test(' '+desc+' ')?'DB':'CR';}
       var debit=typeStr==='DB'?amt:0, credit=typeStr==='CR'?amt:0;
       if(amt===0){skipped++;continue;}
-      transactions.push({date:d,dateKey:isPend?'PEND':(d?dateKey(d):''),monthKey:isPend?'PEND':(d?monthKey(d):''),desc:desc,debit:debit,credit:credit,balance:balance,type:(debit>0?'DB':'CR'),txnId:'bca_'+i+'_'+Math.random().toString(36).slice(2,6),isPending:isPend?true:undefined});
+      transactions.push({date:d,dateKey:isPend?'PEND':(d?dateKey(d):''),monthKey:isPend?'PEND':(d?monthKey(d):''),desc:desc,debit:debit,credit:credit,balance:balance,type:(debit>0?'DB':'CR'),hasExplicitDBCR:hasExplicitDBCR,txnId:'bca_'+i+'_'+Math.random().toString(36).slice(2,6),isPending:isPend?true:undefined});
     }
     if(!transactions.length) return{error:'Tidak ada transaksi yang terbaca dari file BCA.'};
     transactions.sort(function(a,b){if(a.isPending&&!b.isPending)return 1;if(!a.isPending&&b.isPending)return -1;if(a.isPending&&b.isPending)return 0;return a.date-b.date;});
@@ -3894,10 +3936,10 @@ function clientProcessCSV(csvText, bankType) {
     var fn=normalTxns.length?normalTxns[0]:null, ln=normalTxns.length?normalTxns[normalTxns.length-1]:null;
     return{
       success:true,bankInfo:{noRekening:noRek,nama:nama,bankType:'BCA'},
-      pendingTransactions:pendTxns.length?pendTxns.map(function(t){return{date:"PEND",desc:t.desc,debit:t.debit,credit:t.credit,balance:t.balance,type:t.type,txnId:t.txnId,isPending:true};}):undefined,
+      pendingTransactions:pendTxns.length?pendTxns.map(function(t){return{date:"PEND",desc:t.desc,debit:t.debit,credit:t.credit,balance:t.balance,type:t.type,hasExplicitDBCR:!!t.hasExplicitDBCR,txnId:t.txnId,isPending:true};}):undefined,
       summary:{totalTransactions:transactions.length,totalDebit:totalDebit,totalCredit:totalCredit,netFlow:totalCredit-totalDebit,firstDate:fn?fn.dateKey:(pendTxns.length?'PEND':''),lastDate:ln?ln.dateKey:(pendTxns.length?'PEND':''),firstBalance:fn?fn.balance:0,lastBalance:ln?ln.balance:(pendTxns.length?pendTxns[pendTxns.length-1].balance:0),activeDays:0,activeMonths:0,skipped:skipped,pendingCount:pendTxns.length},
       daily:[],monthly:[],
-      transactions:normalTxns.map(function(t){return{date:t.dateKey,desc:t.desc,debit:t.debit,credit:t.credit,balance:t.balance,type:t.type,txnId:t.txnId};}),
+      transactions:normalTxns.map(function(t){return{date:t.dateKey,desc:t.desc,debit:t.debit,credit:t.credit,balance:t.balance,type:t.type,hasExplicitDBCR:!!t.hasExplicitDBCR,txnId:t.txnId};}),
       topDebit:[],topCredit:[],headers:['Date','Description','Branch','Amount','Type','Balance'],mapping:{date:0,desc:1,debit:3,credit:3,balance:5}
     };
   }
@@ -3926,16 +3968,25 @@ function clientProcessCSV(csvText, bankType) {
     if(!isPend && !d){skipped++;continue;}
     var desc=mapping.desc>=0?cleanField(row[mapping.desc]||''):'';
     var balance=mapping.balance>=0?cleanNumber(row[mapping.balance]||''):0;
-    var debit=0,credit=0;
-    if(mapping.debit!==-1&&mapping.credit!==-1){debit=cleanNumber(row[mapping.debit]||'');credit=cleanNumber(row[mapping.credit]||'');}
-    else if(mapping.amount!==-1&&mapping.type!==-1){var amt=cleanNumber(row[mapping.amount]||'');var type=cleanField(row[mapping.type]||'').toUpperCase().trim();if(type==='CR'||type==='K'||type==='KREDIT')credit=amt;else if(type==='DB'||type==='D'||type==='DEBET'||type==='DEBIT')debit=amt;else{var kw=desc.toUpperCase();if(kw.indexOf('CR ')!==-1||kw.indexOf('KREDIT')!==-1)credit=amt;else debit=amt;}}
+    var debit=0,credit=0,hasExplicitDBCR=false;
+    if(mapping.debit!==-1&&mapping.credit!==-1){
+      debit=cleanNumber(row[mapping.debit]||'');credit=cleanNumber(row[mapping.credit]||'');
+      // Jika salah satu kolom debet/kredit berisi nilai > 0, anggap eksplisit
+      if(debit>0||credit>0) hasExplicitDBCR=true;
+    }
+    else if(mapping.amount!==-1&&mapping.type!==-1){
+      var amt=cleanNumber(row[mapping.amount]||'');var type=cleanField(row[mapping.type]||'').toUpperCase().trim();
+      if(type==='CR'||type==='K'||type==='KREDIT'){credit=amt;hasExplicitDBCR=true;}
+      else if(type==='DB'||type==='D'||type==='DEBET'||type==='DEBIT'){debit=amt;hasExplicitDBCR=true;}
+      else{var kw=desc.toUpperCase();if(kw.indexOf('CR ')!==-1||kw.indexOf('KREDIT')!==-1){credit=amt;hasExplicitDBCR=true;}else debit=amt;}
+    }
     else if(mapping.amount!==-1){var rawAmt=cleanField(row[mapping.amount]||'');var numAmt=parseFloat(rawAmt.replace(/[^\d.\-]/g,''));if(numAmt<0)debit=Math.abs(numAmt);else credit=Math.abs(numAmt);}
     else{for(var c=0;c<row.length;c++){if(c===mapping.date||c===mapping.desc||c===mapping.balance||c===mapping.type)continue;var v=cleanNumber(row[c]||'');if(v>0){credit=v;break;}}}
     if(debit===0&&credit===0&&mapping.amount!==-1){
       var fbAmt=cleanNumber(row[mapping.amount]||'');
       if(fbAmt>0) debit=fbAmt;
     }
-    transactions.push({date:d,dateKey:isPend?'PEND':(d?dateKey(d):''),monthKey:isPend?'PEND':(d?monthKey(d):''),desc:desc,debit:debit,credit:credit,balance:balance,type:(credit>0?'CR':'DB'),txnId:'t'+i+'_'+Math.random().toString(36).slice(2,6),isPending:isPend?true:undefined});
+    transactions.push({date:d,dateKey:isPend?'PEND':(d?dateKey(d):''),monthKey:isPend?'PEND':(d?monthKey(d):''),desc:desc,debit:debit,credit:credit,balance:balance,type:(credit>0?'CR':'DB'),hasExplicitDBCR:hasExplicitDBCR,txnId:'t'+i+'_'+Math.random().toString(36).slice(2,6),isPending:isPend?true:undefined});
   }
   if(!transactions.length) return{error:'Tidak ada transaksi. Header: '+headers.join(' | '),skipped:skipped};
   // Sort: PEND di akhir, yang lain berdasarkan date
@@ -3953,10 +4004,10 @@ function clientProcessCSV(csvText, bankType) {
   var lastNormal  = normalTxns.length ? normalTxns[normalTxns.length-1] : null;
   return{
     success:true,
-    pendingTransactions: pendTxns.length ? pendTxns.map(function(t){return{date:'PEND',desc:t.desc,debit:t.debit,credit:t.credit,balance:t.balance,type:t.type,txnId:t.txnId,isPending:true};}) : undefined,
+    pendingTransactions: pendTxns.length ? pendTxns.map(function(t){return{date:'PEND',desc:t.desc,debit:t.debit,credit:t.credit,balance:t.balance,type:t.type,hasExplicitDBCR:!!t.hasExplicitDBCR,txnId:t.txnId,isPending:true};}) : undefined,
     summary:{totalTransactions:transactions.length,totalDebit:totalDebit,totalCredit:totalCredit,netFlow:totalCredit-totalDebit,firstDate:firstNormal?firstNormal.dateKey:(pendTxns.length?'PEND':''),lastDate:lastNormal?lastNormal.dateKey:(pendTxns.length?'PEND':''),firstBalance:firstNormal?firstNormal.balance:0,lastBalance:lastNormal?lastNormal.balance:(pendTxns.length?pendTxns[pendTxns.length-1].balance:0),activeDays:0,activeMonths:0,skipped:skipped,pendingCount:pendTxns.length},
     daily:[],monthly:[],
-    transactions:normalTxns.map(function(t){return{date:t.dateKey,desc:t.desc,debit:t.debit,credit:t.credit,balance:t.balance,type:t.type,txnId:t.txnId};}),
+    transactions:normalTxns.map(function(t){return{date:t.dateKey,desc:t.desc,debit:t.debit,credit:t.credit,balance:t.balance,type:t.type,hasExplicitDBCR:!!t.hasExplicitDBCR,txnId:t.txnId};}),
     topDebit:[],topCredit:[],
     headers:headers,mapping:mapping
   };
@@ -3969,7 +4020,7 @@ var _pendTxns = []; // list transaksi pending yang perlu diassign tanggal
 
 function openPendModal(pendTxns) {
   _pendTxns = pendTxns.map(function(t, i) {
-    return { idx: i, desc: t.desc, debit: t.debit, credit: t.credit, balance: t.balance, type: t.type, txnId: t.txnId, chosenDate: '' };
+    return { idx: i, desc: t.desc, debit: t.debit, credit: t.credit, balance: t.balance, type: t.type, hasExplicitDBCR: !!t.hasExplicitDBCR, txnId: t.txnId, chosenDate: '' };
   });
   // Default: tanggal hari ini
   var today = new Date().toISOString().slice(0,10);
@@ -3993,6 +4044,7 @@ function renderPendModal() {
     html += '<div class="pend-info">';
     html += '<div class="pend-desc" title="' + esc(t.desc) + '">' + (t.desc || '(tanpa keterangan)') + '</div>';
     html += '<div class="pend-meta">';
+    if (t.hasExplicitDBCR) html += '<span style="color:var(--accent);font-weight:600" title="DB/CR sudah jelas di CSV/Excel — tidak akan dikoreksi otomatis">🔒 DB/CR eksplisit</span>';
     if (t.debit > 0)  html += '<span>Debet: <strong style="color:var(--red)">' + fmt(t.debit) + '</strong></span>';
     if (t.credit > 0) html += '<span>Kredit: <strong style="color:var(--green)">' + fmt(t.credit) + '</strong></span>';
     if (t.balance > 0) html += '<span>Saldo: ' + fmt(t.balance) + '</span>';
@@ -4038,23 +4090,50 @@ function skipAllPendAndSave() {
 }
 
 // ============================================================
-// KOREKSI OTOMATIS DEBIT/KREDIT BERBASIS SALDO UNTUK PEND
+// PRESERVASI EXCEL v4.4 — TIDAK ADA KOREKSI OTOMATIS SAMA SEKALI
 // ============================================================
-// Masalah: Banyak baris PEND di CSV BCA/Mandiri tidak punya kolom DB/CR
-// yang jelas, sehingga parser salah menebak arah (seharusnya CR malah jadi
-// DB). Fungsi ini memakai field `balance` (saldo akhir) untuk verifikasi:
-//   - saldo NAIK  → CR (uang masuk)
-//   - saldo TURUN → DB (uang keluar)
-// Jika arah saat ini tidak konsisten dengan arah saldo, SWAP debit↔credit.
-// Berjalan otomatis di confirmPendAndSave() sebelum PEND dimasukkan ke
-// transactions. Aman: jika saldo 0 / tidak ada, fallback ke keyword desc.
+// Sejarah singkat:
+//   v4.1/v4.2: _correctPendDirectionByBalance aktif & agresif → banyak
+//              transaksi PEND tertukar DB<->CR sehingga sheet ≠ Excel.
+//   v4.3     : Koreksi dibuat konservatif (hanya untuk non-eksplisit).
+//   v4.4     : KOREKSI OTOMATIS DINONAKTIFKAN TOTAL. Semua transaksi
+//              (PEND maupun normal) dipertahankan PERSIS seperti di
+//              CSV/Excel saat import. Sheet = Excel. Mutlak.
+//
+// Alasan v4.4:
+//   User minta: "bukan yang status PEND aja, tapi ALL status saat import
+//   harus persis sama dengan Excel." Jadi kita hapus semua heuristik
+//   swap DB/CR. Parser bertugas membaca DB/CR apa adanya; jika parser
+//   salah baca (mis. kolom DB/CR tak terdeteksi), itu bug parser yang
+//   harus diperbaiki di parser — BUKAN ditutupi dengan swap di sini.
+//
+// Fungsi ini sengaja di-keep sebagai stub no-op agar pemanggilan di
+// confirmPendAndSave() tidak perlu diubah. Return 0 = tidak ada koreksi.
 // ============================================================
 function _correctPendDirectionByBalance(pendTxns, normalTxns) {
+  // NO-OP sejak v4.4. Semua transaksi dipertahankan apa adanya.
+  // Tetap log jumlah transaksi untuk transparency.
+  if (pendTxns && pendTxns.length) {
+    console.log('[PRESERVASI EXCEL v4.4] ' + pendTxns.length +
+      ' transaksi PEND dipertahankan apa adanya (tidak ada koreksi DB/CR).');
+  }
+  return 0;
+}
+
+// ============================================================
+// (LEGACY v4.3 — KODE KOREKSI DINONAKTIFKAN, DISEMBUNYIKAN UNTUK ARSIP)
+// ============================================================
+// Kode berikut adalah implementasi _correctPendDirectionByBalance versi
+// v4.3 yang masih melakukan koreksi kondisional. Dipertahankan sebagai
+// referensi tapi TIDAK DIEKSEKUSI. Bila di masa depan diperlukan koreksi
+// otomatis (mis. untuk bank yang kolom DB/CR-nya benar-benar hilang),
+// aktifkan kembali dengan hati-hati dan berikan toggle UI eksplisit.
+// ============================================================
+function _correctPendDirectionByBalance_v43_DISABLED(pendTxns, normalTxns) {
   if (!pendTxns || !pendTxns.length) return 0;
   var correctedCount = 0;
+  var skippedExplicit = 0;
 
-  // Salin & sort normal txns by date asc (string YYYY-MM-DD sudah sort-friendly).
-  // PEND ('PEND' string) di-exclude.
   var sortedNormal = [];
   if (normalTxns && normalTxns.length) {
     sortedNormal = normalTxns.slice().sort(function(a, b) {
@@ -4066,28 +4145,35 @@ function _correctPendDirectionByBalance(pendTxns, normalTxns) {
     });
   }
 
-  // Sort PEND txns by chosenDate asc agar chaining pada tanggal yang sama benar.
   var sortedPend = pendTxns.slice().sort(function(a, b) {
     return a.chosenDate < b.chosenDate ? -1 : a.chosenDate > b.chosenDate ? 1 : 0;
   });
 
-  // State untuk chaining multiple PEND pada tanggal yang sama
   var runningBalance = null;
   var lastChosenDate = null;
 
   sortedPend.forEach(function(t) {
     var amt = (t.debit > 0) ? t.debit : (t.credit > 0 ? t.credit : 0);
-    if (amt <= 0) return; // tidak ada nominal → skip
+    if (amt <= 0) return;
+
+    if (t.hasExplicitDBCR) {
+      skippedExplicit++;
+      if (t.balance && t.balance > 0) {
+        runningBalance = t.balance;
+      } else if (t.type === 'CR') {
+        runningBalance = (runningBalance || 0) + amt;
+      } else {
+        runningBalance = (runningBalance || 0) - amt;
+      }
+      lastChosenDate = t.chosenDate;
+      return;
+    }
 
     var hasBalance = (t.balance && t.balance > 0);
-
-    // 1) Tentukan prevBalance (saldo tepat sebelum transaksi PEND ini)
     var prevBalance = null;
     if (lastChosenDate === t.chosenDate && runningBalance !== null) {
-      // Ada PEND sebelumnya pada tanggal yang sama → pakai running balance
       prevBalance = runningBalance;
     } else {
-      // Cari normal txn terakhir dengan date <= chosenDate
       for (var i = sortedNormal.length - 1; i >= 0; i--) {
         var nDate = sortedNormal[i].date || sortedNormal[i].dateKey || '';
         if (nDate !== 'PEND' && nDate <= t.chosenDate) {
@@ -4095,7 +4181,6 @@ function _correctPendDirectionByBalance(pendTxns, normalTxns) {
           break;
         }
       }
-      // Fallback: jika tidak ada normal txn sebelum chosenDate, pakai saldo awal
       if (prevBalance === null) {
         prevBalance = (sortedNormal.length ? (sortedNormal[0].balance || 0) : 0);
       }
@@ -4103,54 +4188,31 @@ function _correctPendDirectionByBalance(pendTxns, normalTxns) {
 
     var currentIsDebit = (t.debit > 0);
 
-    // 2) Cek apakah debit/kredit saat ini konsisten dengan saldo tercatat
-    if (hasBalance && prevBalance !== null) {
-      var expectedIfCredit = prevBalance + amt; // CR  → saldo naik
-      var expectedIfDebit  = prevBalance - amt; // DB  → saldo turun
-
+    if (hasBalance && prevBalance !== null && prevBalance > 0) {
+      var expectedIfCredit = prevBalance + amt;
+      var expectedIfDebit  = prevBalance - amt;
       var matchesCredit = Math.abs(expectedIfCredit - t.balance) < 1;
       var matchesDebit  = Math.abs(expectedIfDebit  - t.balance) < 1;
 
       if (matchesCredit && !matchesDebit && currentIsDebit) {
-        // Harusnya CR, tapi saat ini DB → SWAP
-        t.debit = 0; t.credit = amt; t.type = 'CR';
-        t._autoCorrected = true;
-        correctedCount++;
-      } else if (matchesDebit && !matchesCredit && !currentIsDebit) {
-        // Harusnya DB, tapi saat ini CR → SWAP
-        t.credit = 0; t.debit = amt; t.type = 'DB';
-        t._autoCorrected = true;
-        correctedCount++;
-      } else if (!matchesCredit && !matchesDebit) {
-        // Tidak ada yang persis cocok (mungkin karena ada PEND lain di tanggal sama
-        // atau ada biaya admin yang ikut). Pakai heuristik arah saldo.
-        if (t.balance > prevBalance && currentIsDebit) {
+        var d = (t.desc || '').toUpperCase();
+        var looksDebit  = /(DB\b|DEBET|DEBIT|KELUAR|TRSF.*OUT|BI-FAST.*DB|TARIK|PINDAH BUKU.*KELUAR|BAYAR|PEMBAYARAN|PURCHASE|SWITCHING|TF KE|ADMIN|BIAYA)/.test(d);
+        if (!looksDebit) {
           t.debit = 0; t.credit = amt; t.type = 'CR';
           t._autoCorrected = true;
           correctedCount++;
-        } else if (t.balance < prevBalance && !currentIsDebit) {
+        }
+      } else if (matchesDebit && !matchesCredit && !currentIsDebit) {
+        var d2 = (t.desc || '').toUpperCase();
+        var looksCredit = /(CR\b|KREDIT|MASUK|TRSF.*IN|BI-FAST.*CR|SETOR|PINDAH BUKU.*MASUK|TERIMA|PENERIMAAN|DEPOSIT)/.test(d2);
+        if (!looksCredit) {
           t.credit = 0; t.debit = amt; t.type = 'DB';
           t._autoCorrected = true;
           correctedCount++;
         }
       }
-    } else {
-      // 3) Fallback: tidak ada saldo → pakai keyword di desc
-      var d = (t.desc || '').toUpperCase();
-      var looksCredit = /(CR\b|KREDIT|MASUK|TRSF.*IN|BI-FAST.*CR|SETOR|PINDAH BUKU.*MASUK|TERIMA|PENERIMAAN|DEPOSIT)/.test(d);
-      var looksDebit  = /(DB\b|DEBET|DEBIT|KELUAR|TRSF.*OUT|BI-FAST.*DB|TARIK|PINDAH BUKU.*KELUAR|BAYAR|PEMBAYARAN|PURCHASE|SWITCHING|TF KE|ADMIN|BIAYA)/.test(d);
-      if (looksCredit && !looksDebit && currentIsDebit) {
-        t.debit = 0; t.credit = amt; t.type = 'CR';
-        t._autoCorrected = true;
-        correctedCount++;
-      } else if (looksDebit && !looksCredit && !currentIsDebit) {
-        t.credit = 0; t.debit = amt; t.type = 'DB';
-        t._autoCorrected = true;
-        correctedCount++;
-      }
     }
 
-    // 4) Update running balance untuk PEND berikutnya pada tanggal yang sama
     if (hasBalance) {
       runningBalance = t.balance;
     } else if (t.type === 'CR') {
@@ -4161,6 +4223,9 @@ function _correctPendDirectionByBalance(pendTxns, normalTxns) {
     lastChosenDate = t.chosenDate;
   });
 
+  if (skippedExplicit > 0) {
+    console.log('[PEND v4.3 disabled] ' + skippedExplicit + ' transaksi dilewati (DB/CR eksplisit).');
+  }
   return correctedCount;
 }
 
@@ -4172,14 +4237,17 @@ function confirmPendAndSave() {
     return;
   }
 
-  // ── KOREKSI OTOMATIS DEBIT/KREDIT BERBASIS SALDO ──
-  // Bandingkan saldo PEND dengan saldo transaksi normal terdekat sebelum tanggal
-  // yang dipilih. Jika arah debit/kredit tidak konsisten dengan arah perubahan
-  // saldo, SWAP agar transaksi tidak salah masuk kolom.
+  // ── PRESERVASI EXCEL v4.4 — TIDAK ADA KOREKSI OTOMATIS ──
+  // Semua transaksi (PEND maupun normal) dipertahankan PERSIS seperti di
+  // CSV/Excel. Fungsi _correctPendDirectionByBalance sekarang no-op.
   var existingNormal = (pendingCSVData && pendingCSVData.transactions) ? pendingCSVData.transactions : [];
-  var nCorrected = _correctPendDirectionByBalance(_pendTxns, existingNormal);
+  var nCorrected = _correctPendDirectionByBalance(_pendTxns, existingNormal); // selalu 0 di v4.4
+  var nExplicit  = _pendTxns.filter(function(t){ return t.hasExplicitDBCR; }).length;
   if (nCorrected > 0) {
-    showToast('✓ ' + nCorrected + ' transaksi PEND dikoreksi otomatis (debit/kredit disesuaikan dengan saldo).', 'success');
+    // Seharusnya tidak terjadi di v4.4 — hanya jaga fallback
+    showToast('✓ ' + nCorrected + ' transaksi PEND dikoreksi. ' + nExplicit + ' lain dipertahankan apa adanya.', 'success');
+  } else {
+    showToast('🔒 PRESERVASI EXCEL: Semua ' + _pendTxns.length + ' transaksi PEND dipertahankan persis seperti di CSV/Excel.', 'success');
   }
 
   // Masukkan transaksi PEND ke transactions dengan tanggal yang dipilih
@@ -4192,6 +4260,7 @@ function confirmPendAndSave() {
         credit: t.credit,
         balance: t.balance,
         type: t.type,
+        hasExplicitDBCR: !!t.hasExplicitDBCR,
         txnId: t.txnId,
         wasPending: true,
         autoCorrected: t._autoCorrected ? true : undefined
