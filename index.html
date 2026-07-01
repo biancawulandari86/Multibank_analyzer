@@ -1050,7 +1050,7 @@ body.mode-hp #btn-hamburger { display: flex !important; }
      ============================================================ -->
 <script>
 // ── KONFIGURASI — isi URL GAS Web App kamu di sini ──
-var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbwP9sQJY_5vuV_Zr5nUE04aia9KXk_8X-Oqkc7lF_-kLgwsNk0LUpBm8qyNK2Skx2yh/exec';
+var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbywSsN3d5BBfUk6uw6HNUaFJe5jzAZQCjdusAlX03OfhMAUx6fDFNhM07-m1AlJgEVX/exec';
 
 // ── Bridge: gasCall(funcName, args, onSuccess, onFailure) ──
 // Meniru perilaku gasCall('funcName', [], , function(e){ console.error(e); })
@@ -1773,7 +1773,7 @@ function gasCall(funcName, args, onSuccess, onFailure) {
         Transaksi berikut memiliki tanggal <strong style="color:var(--amber)">PEND</strong> (pending/belum settle).<br>
         Pilih tanggal yang sesuai agar transaksi ini bisa tersimpan dengan benar.
         <div style="margin-top:8px;padding:8px 10px;background:var(--accent-glow);border-left:3px solid var(--accent);border-radius:4px;color:var(--text);font-size:11.5px;line-height:1.6">
-          <strong style="color:var(--accent)">🔒 Mode Verifikasi Saldo v4.5:</strong> Setelah pilih tanggal, sistem akan <strong>mengecek konsistensi DB/CR dengan saldo</strong> sebelum simpan ke GSheet. Jika saldo aktual cocok dengan arah lawan (mis. ditandai DB tapi saldo naik = mestinya CR), sistem <strong>otomatis swap</strong>. Hanya swap jika bukti saldo <strong>decisive</strong> (satu arah match, arah lain tidak match, toleransi 1 rupiah). Backup safety-net juga aktif di back-end (Code.gs saveToSheets).
+          <strong style="color:var(--accent)">🔒 Mode Verifikasi Saldo v4.6:</strong> Setelah pilih tanggal, sistem akan <strong>mengecek konsistensi DB/CR dengan saldo</strong> sebelum simpan ke GSheet. Patokan awal = <strong>saldo terakhir dari transaksi normal</strong> (sisa saldo terakhir dijadikan acuan). Untuk setiap transaksi: <strong>debit → saldo berkurang</strong>, <strong>kredit → saldo bertambah</strong>. Jika saldo aktual cocok dengan arah lawan, sistem <strong>otomatis swap</strong>. Hanya swap jika bukti saldo <strong>decisive</strong> (satu arah match, arah lain tidak match, toleransi 1 rupiah). Backup safety-net juga aktif di back-end (Code.gs saveToSheets).
         </div>
       </div>
       <!-- Apply semua sekaligus -->
@@ -4114,7 +4114,33 @@ function skipAllPendAndSave() {
 //
 // Front-end fix ini didukung oleh back-end (Code.gs saveToSheets) yang
 // juga melakukan verifikasi saldo sebagai safety net sebelum tulis sheet.
+//
+// v4.6: FIX BUG date format — normalize DD/MM/YYYY → YYYY-MM-DD sebelum
+//       perbandingan. Jika tidak ada normal dengan date <= chosenDate,
+//       GUNAKAN SALDO TERAKHIR dari transaksi normal manapun sebagai
+//       patokan (sesuai permintaan user: "sisa saldo terakhir dijadikan
+//       patokan"). Ini memastikan PEND pertama di-verify, bukan skip.
 // ============================================================
+
+// Helper: normalize tanggal ke YYYY-MM-DD
+function _normalizeDateV46(s) {
+  if (!s) return '';
+  s = String(s).trim();
+  // DD/MM/YYYY or DD-MM-YYYY
+  var m = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/);
+  if (m) return m[3] + '-' + (m[2].length===1?'0':'') + m[2] + '-' + (m[1].length===1?'0':'') + m[1];
+  // YYYY-MM-DD already
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return s;
+  // DD MMM YYYY (e.g. "30 Jun 2026")
+  m = s.match(/^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})$/);
+  if (m) {
+    var mo = {jan:'01',feb:'02',mar:'03',apr:'04',mei:'05',may:'05',jun:'06',jul:'07',agu:'08',aug:'08',sep:'09',okt:'10',oct:'10',nov:'11',des:'12',dec:'12'};
+    return m[3] + '-' + (mo[m[2].toLowerCase()]||'01') + '-' + (m[1].length===1?'0':'') + m[1];
+  }
+  return s; // fallback: return as-is
+}
+
 function _correctPendDirectionByBalance(pendTxns, csvNormalTxns, sheetExistingTxns) {
   if (!pendTxns || !pendTxns.length) return 0;
   var TOLERANCE = 1; // 1 rupiah
@@ -4125,25 +4151,33 @@ function _correctPendDirectionByBalance(pendTxns, csvNormalTxns, sheetExistingTx
   if (csvNormalTxns && csvNormalTxns.length) {
     csvNormalTxns.forEach(function(t) {
       if (!t.date || t.date === 'PEND') return;
-      allNormal.push({ date: t.date, balance: parseFloat(t.balance)||0, type: t.type,
+      allNormal.push({ date: _normalizeDateV46(t.date), balance: parseFloat(t.balance)||0, type: t.type,
                        debit: parseFloat(t.debit)||0, credit: parseFloat(t.credit)||0 });
     });
   }
   if (sheetExistingTxns && sheetExistingTxns.length) {
     sheetExistingTxns.forEach(function(t) {
       if (!t.date || t.date === 'PEND') return; // skip PEND di sheet eksisting
-      allNormal.push({ date: t.date, balance: parseFloat(t.balance)||0, type: t.type,
+      allNormal.push({ date: _normalizeDateV46(t.date), balance: parseFloat(t.balance)||0, type: t.type,
                        debit: parseFloat(t.debit)||0, credit: parseFloat(t.credit)||0 });
     });
   }
 
-  // Sort normal by date ascending
+  // Sort normal by date ascending (semua sudah di-normalize ke YYYY-MM-DD)
   allNormal.sort(function(a, b) {
     var da = a.date || '', db = b.date || '';
     if (da === 'PEND') return 1;
     if (db === 'PEND') return -1;
     return da < db ? -1 : da > db ? 1 : 0;
   });
+
+  // ── v4.6: SALDO TERAKHIR dari transaksi normal manapun ──
+  // Patokan awal jika PEND pertama tidak ada normal dengan date <= chosenDate.
+  // Sesuai permintaan user: "sisa saldo terakhir dijadikan patokan".
+  var lastKnownBalance = null;
+  for (var k = allNormal.length - 1; k >= 0; k--) {
+    if (allNormal[k].balance > 0) { lastKnownBalance = allNormal[k].balance; break; }
+  }
 
   // Sort PEND by chosenDate ascending (transaksi PEND yang sudah di-assign tanggal)
   var sortedPend = pendTxns.slice().sort(function(a, b) {
@@ -4162,23 +4196,32 @@ function _correctPendDirectionByBalance(pendTxns, csvNormalTxns, sheetExistingTx
               : ((parseFloat(t.credit) || 0) > 0 ? parseFloat(t.credit) : 0);
     if (amt <= 0) return;
 
+    // ── Normalize chosenDate untuk konsistensi ──
+    var chosenDateNorm = _normalizeDateV46(t.chosenDate);
+
     // ── Cari saldo sebelumnya ──
     var prevBalance = null;
     if (lastChosenDate === t.chosenDate && runningBalance !== null) {
       // PEND sebelumnya di tanggal yang sama → pakai running balance
       prevBalance = runningBalance;
     } else {
-      // Cari dari normal terakhir dengan date <= chosenDate
+      // Cari dari normal terakhir dengan date (normalized) <= chosenDate (normalized)
       for (var i = allNormal.length - 1; i >= 0; i--) {
         var nDate = allNormal[i].date || '';
-        if (nDate !== 'PEND' && nDate <= t.chosenDate) {
+        if (nDate !== 'PEND' && nDate <= chosenDateNorm) {
           prevBalance = allNormal[i].balance || 0;
           break;
         }
       }
-      // Jika tidak ada normal sebelumnya, gunakan running balance dari PEND sebelumnya
+      // v4.6: Jika masih null, gunakan running balance dari PEND sebelumnya
       if (prevBalance === null && runningBalance !== null) {
         prevBalance = runningBalance;
+      }
+      // v4.6: Jika MASIH null (PEND pertama, tidak ada normal match), gunakan
+      // SALDO TERAKHIR dari transaksi normal manapun (sisa saldo terakhir).
+      // Ini memastikan PEND pertama tetap diverifikasi, bukan di-skip.
+      if (prevBalance === null && lastKnownBalance !== null) {
+        prevBalance = lastKnownBalance;
       }
     }
 
@@ -4224,14 +4267,15 @@ function _correctPendDirectionByBalance(pendTxns, csvNormalTxns, sheetExistingTx
 
   // Log detail koreksi untuk transparency
   if (correctedCount > 0) {
-    console.log('[v4.5 KOREKSI PEND] ' + correctedCount + ' transaksi PEND dikoreksi berdasarkan saldo:');
+    console.log('[v4.6 KOREKSI PEND] ' + correctedCount + ' transaksi PEND dikoreksi berdasarkan saldo:');
     swapLog.forEach(function(s, i) {
       console.log('  [' + (i+1) + '] "' + (s.desc||'').slice(0,50) + '" ' +
                   s.from + '→' + s.to + ' (amt=' + s.amt + ', prev=' + s.prev + ', actual=' + s.actual + ')');
     });
   } else {
-    console.log('[v4.5 KOREKSI PEND] Tidak ada koreksi diperlukan untuk ' +
-                (pendTxns.length||0) + ' transaksi PEND (semua konsisten dengan saldo).');
+    console.log('[v4.6 KOREKSI PEND] Tidak ada koreksi diperlukan untuk ' +
+                (pendTxns.length||0) + ' transaksi PEND (semua konsisten dengan saldo). Patokan awal: ' +
+                (lastKnownBalance||'none'));
   }
 
   return correctedCount;
@@ -4369,10 +4413,10 @@ function confirmPendAndSave() {
   var nExplicit  = _pendTxns.filter(function(t){ return t.hasExplicitDBCR; }).length;
 
   if (nCorrected > 0) {
-    showToast('✓ v4.5: ' + nCorrected + ' transaksi PEND dikoreksi berdasarkan saldo (DB↔CR). ' +
+    showToast('✓ v4.6: ' + nCorrected + ' transaksi PEND dikoreksi berdasarkan saldo (DB↔CR). ' +
               (nExplicit - nCorrected) + ' lain dipertahankan.', 'success');
   } else {
-    showToast('✓ v4.5: Semua ' + _pendTxns.length + ' transaksi PEND konsisten dengan saldo. Tidak ada koreksi diperlukan.', 'success');
+    showToast('✓ v4.6: Semua ' + _pendTxns.length + ' transaksi PEND konsisten dengan saldo. Tidak ada koreksi diperlukan.', 'success');
   }
 
   // Masukkan transaksi PEND ke transactions dengan tanggal yang dipilih
