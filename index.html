@@ -1050,7 +1050,7 @@ body.mode-hp #btn-hamburger { display: flex !important; }
      ============================================================ -->
 <script>
 // ── KONFIGURASI — isi URL GAS Web App kamu di sini ──
-var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbzdC8V_asf_2h7JfNa3Ut7Bs62TpKQPpIntCJFZYH9f3yqD6aV0hdLusaRV_6BOEv8H/exec';
+var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbwuP1lHQdt-T7-e0ZMkSc0E_yRlU3kMOOVrQrHtLCzRlOc-xCcITR1XRNvLXHjF8Z4B/exec';
 
 // ── Bridge: gasCall(funcName, args, onSuccess, onFailure) ──
 // Meniru perilaku gasCall('funcName', [], , function(e){ console.error(e); })
@@ -1774,7 +1774,7 @@ function gasCall(funcName, args, onSuccess, onFailure) {
         Transaksi berikut memiliki tanggal <strong style="color:var(--amber)">PEND</strong> (pending/belum settle).<br>
         Pilih tanggal yang sesuai agar transaksi ini bisa tersimpan dengan benar.
         <div style="margin-top:8px;padding:8px 10px;background:var(--accent-glow);border-left:3px solid var(--accent);border-radius:4px;color:var(--text);font-size:11.5px;line-height:1.6">
-          <strong style="color:var(--accent)">🔒 Mode Verifikasi Saldo v4.8:</strong> Setelah pilih tanggal, sistem akan <strong>mengecek konsistensi DB/CR dengan saldo</strong> sebelum simpan ke GSheet. Patokan awal = <strong>saldo terakhir dari transaksi normal</strong> (sisa saldo terakhir dijadikan acuan). Untuk setiap transaksi: <strong>debit → saldo berkurang</strong>, <strong>kredit → saldo bertambah</strong>. Jika saldo aktual cocok dengan arah lawan, sistem <strong>otomatis swap</strong>. Hanya swap jika bukti saldo <strong>decisive</strong> (satu arah match, arah lain tidak match, toleransi 1 rupiah). Backup safety-net juga aktif di back-end (Code.gs saveToSheets). <strong>v4.8 baru:</strong> tombol <strong>"🔄 Recalculate Saldo"</strong> dengan fitur <strong>"🔍 Cek Konsistensi"</strong> untuk deteksi transaksi yang saldo-nya "nyasar" (mis. desimal berubah padahal debit/kredit 0 atau bulat).
+          <strong style="color:var(--accent)">🔒 Mode Verifikasi Saldo v4.9:</strong> Setelah pilih tanggal, sistem akan <strong>mengecek konsistensi DB/CR dengan saldo</strong> sebelum simpan ke GSheet. Patokan awal = <strong>saldo terakhir dari transaksi normal</strong> (sisa saldo terakhir dijadikan acuan). Untuk setiap transaksi: <strong>debit → saldo berkurang</strong>, <strong>kredit → saldo bertambah</strong>. Jika saldo aktual cocok dengan arah lawan, sistem <strong>otomatis swap</strong>. Hanya swap jika bukti saldo <strong>decisive</strong> (satu arah match, arah lain tidak match, toleransi 1 rupiah). Backup safety-net juga aktif di back-end (Code.gs saveToSheets). <strong>v4.9 baru:</strong> Mode <strong>"🎯 Fix Smart"</strong> di Recalculate Saldo — hanya fix dari titik inkonsistensi, saldo akhir tetap dekat dengan existing (tidak jauh beda).
         </div>
       </div>
       <!-- Apply semua sekaligus -->
@@ -1817,19 +1817,42 @@ function gasCall(funcName, args, onSuccess, onFailure) {
         </div>
       </div>
 
-      <!-- Input saldo awal -->
+      <!-- Input saldo awal + Mode selection -->
       <div style="padding:16px 20px;border-bottom:1px solid var(--border)">
+        <!-- v4.9: Pilihan Mode -->
         <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">
-          <strong>Saldo awal (sebelum transaksi pertama):</strong>
+          <strong>Mode Recalculate:</strong>
         </label>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+          <label style="display:flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--card);font-size:12px;flex:1;min-width:200px">
+            <input type="radio" name="recalc-mode" value="fixFromInconsistency" checked style="cursor:pointer">
+            <div>
+              <strong style="color:var(--green)">🎯 Fix Smart (RECOMMENDED)</strong><br>
+              <span style="font-size:10.5px;color:var(--muted2)">Hanya recalculate dari titik inkonsistensi pertama. Saldo sebelumnya TIDAK diubah. Hasil saldo akhir tetap dekat dengan existing — cocok untuk fix desimal kecil.</span>
+            </div>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--card);font-size:12px;flex:1;min-width:200px">
+            <input type="radio" name="recalc-mode" value="explicitStart" style="cursor:pointer">
+            <div>
+              <strong style="color:var(--accent)">📊 Full Recalculate</strong><br>
+              <span style="font-size:10.5px;color:var(--muted2)">Hitung ulang semua saldo dari saldo awal yang diinput. Saldo akhir bisa jauh berbeda jika ada D/K yang salah parse.</span>
+            </div>
+          </label>
+        </div>
+
+        <!-- Input saldo awal (hanya untuk mode Full Recalculate) -->
+        <div id="recalc-start-balance-row" style="display:none">
+          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">
+            <strong>Saldo awal (sebelum transaksi pertama):</strong>
+          </label>
           <input type="number" step="0.01" id="recalc-start-balance" placeholder="contoh: 80000000 atau kosongkan untuk pakai saldo transaksi pertama"
-                 style="flex:1;min-width:250px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text);font-family:var(--mono);font-size:13px">
-          <button class="btn-sm primary" onclick="doPreviewRecalculate()" style="padding:8px 16px">👁️ Preview Perubahan</button>
+                 style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text);font-family:var(--mono);font-size:13px">
+          <div style="margin-top:6px;font-size:11px;color:var(--muted2)">
+            💡 Kosongkan jika ingin pakai saldo transaksi pertama sebagai acuan.
+          </div>
         </div>
-        <div style="margin-top:6px;font-size:11px;color:var(--muted2)">
-          💡 Kosongkan jika ingin pakai saldo transaksi pertama sebagai acuan (transaksi pertama tidak diubah saldonya).
-        </div>
+
+        <button class="btn-sm primary" onclick="doPreviewRecalculate()" style="margin-top:12px;padding:10px 20px;width:100%">👁️ Preview Perubahan</button>
       </div>
 
       <!-- Hasil preview -->
@@ -1837,7 +1860,7 @@ function gasCall(funcName, args, onSuccess, onFailure) {
         <!-- v4.8: Section Konsistensi (ditampilkan pertama) -->
         <div id="recalc-consistency-section" style="margin-bottom:14px"></div>
         <div id="recalc-preview-summary" style="padding:10px 12px;background:var(--bg);border-radius:6px;font-size:12px;line-height:1.7;margin-bottom:12px"></div>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Contoh perubahan setelah recalculate (maks 20 transaksi pertama yang berubah):</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Contoh perubahan setelah recalculate (maks 30 transaksi pertama yang berubah):</div>
         <div id="recalc-preview-list" style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:6px"></div>
       </div>
     </div>
@@ -4470,10 +4493,10 @@ function confirmPendAndSave() {
   var nExplicit  = _pendTxns.filter(function(t){ return t.hasExplicitDBCR; }).length;
 
   if (nCorrected > 0) {
-    showToast('✓ v4.8: ' + nCorrected + ' transaksi PEND dikoreksi berdasarkan saldo (DB↔CR). ' +
+    showToast('✓ v4.9: ' + nCorrected + ' transaksi PEND dikoreksi berdasarkan saldo (DB↔CR). ' +
               (nExplicit - nCorrected) + ' lain dipertahankan.', 'success');
   } else {
-    showToast('✓ v4.8: Semua ' + _pendTxns.length + ' transaksi PEND konsisten dengan saldo. Tidak ada koreksi diperlukan.', 'success');
+    showToast('✓ v4.9: Semua ' + _pendTxns.length + ' transaksi PEND konsisten dengan saldo. Tidak ada koreksi diperlukan.', 'success');
   }
 
   // Masukkan transaksi PEND ke transactions dengan tanggal yang dipilih
@@ -4534,9 +4557,37 @@ function openRecalculateModal(bankId) {
   openModal('modal-recalculate');
 }
 
+function getSelectedRecalcMode() {
+  var radios = document.getElementsByName('recalc-mode');
+  for (var i = 0; i < radios.length; i++) {
+    if (radios[i].checked) return radios[i].value;
+  }
+  return 'fixFromInconsistency'; // default
+}
+
+function updateRecalcModeUI() {
+  var mode = getSelectedRecalcMode();
+  var startRow = document.getElementById('recalc-start-balance-row');
+  if (startRow) startRow.style.display = (mode === 'explicitStart') ? 'block' : 'none';
+}
+
+// Attach event listeners on radio change
+(function() {
+  setTimeout(function() {
+    var radios = document.getElementsByName('recalc-mode');
+    for (var i = 0; i < radios.length; i++) {
+      radios[i].addEventListener('change', updateRecalcModeUI);
+    }
+  }, 500);
+})();
+
 function doPreviewRecalculate() {
   if (!_recalcPendingBank) { showToast('Bank tidak terpilih.', 'warn'); return; }
-  var startBal = document.getElementById('recalc-start-balance').value.trim();
+  var mode = getSelectedRecalcMode();
+  var startBalInput = document.getElementById('recalc-start-balance').value.trim();
+  // v4.9: Jika mode fixFromInconsistency, kirim special marker ke backend
+  var startBal = (mode === 'fixFromInconsistency') ? '__FIX_FROM_INCONSISTENCY__' : startBalInput;
+
   var summaryEl = document.getElementById('recalc-preview-summary');
   var listEl = document.getElementById('recalc-preview-list');
   var sectionEl = document.getElementById('recalc-preview-section');
@@ -4571,7 +4622,23 @@ function doPreviewRecalculate() {
       var startBalFmt = fmt(res.startingBalance || 0);
       var finalBalFmt = fmt(res.finalBalance || 0);
       var warna = totalChanged > 0 ? 'var(--amber)' : 'var(--green)';
-      var html = '<div style="margin-bottom:8px"><strong>Total transaksi:</strong> ' + totalRows + '</div>';
+
+      // v4.9: Tampilkan info mode
+      var modeLabel = '';
+      if (res.mode === 'fixFromInconsistency') {
+        modeLabel = '<div style="margin-bottom:8px;color:var(--green)"><strong>Mode:</strong> 🎯 Fix Smart' +
+          (res.fixStartIdx > 0 ? ' (mulai dari transaksi #' + (res.fixStartIdx + 1) +
+            (res.fixStartDate ? ' / ' + esc(res.fixStartDate) : '') +
+            (res.fixStartDesc ? ' / "' + esc(res.fixStartDesc) + '"' : '') + ')'
+            : ' (tidak ada inkonsistensi ditemukan)') + '</div>';
+      } else if (res.mode === 'explicitStart') {
+        modeLabel = '<div style="margin-bottom:8px;color:var(--accent)"><strong>Mode:</strong> 📊 Full Recalculate (dari saldo awal eksplisit)</div>';
+      } else {
+        modeLabel = '<div style="margin-bottom:8px;color:var(--muted)"><strong>Mode:</strong> Auto (pakai saldo transaksi pertama)</div>';
+      }
+
+      var html = modeLabel;
+      html += '<div style="margin-bottom:8px"><strong>Total transaksi:</strong> ' + totalRows + '</div>';
       html += '<div style="margin-bottom:8px"><strong>Saldo awal (acuan):</strong> <code style="font-family:var(--mono)">' + startBalFmt + '</code></div>';
       html += '<div style="margin-bottom:8px"><strong>Saldo akhir (setelah recalculate):</strong> <code style="font-family:var(--mono);color:var(--accent)">' + finalBalFmt + '</code></div>';
       html += '<div style="margin-bottom:8px;color:' + warna + '"><strong>Transaksi yang akan berubah:</strong> ' + totalChanged + ' dari ' + totalRows + '</div>';
@@ -4764,7 +4831,10 @@ function doApplyRecalculate() {
   if (!_recalcPendingBank) { showToast('Bank tidak terpilih.', 'warn'); return; }
   var applyBtn = document.getElementById('btn-apply-recalc');
   if (applyBtn.disabled) return;
-  var startBal = document.getElementById('recalc-start-balance').value.trim();
+  // v4.9: Gunakan mode yang dipilih
+  var mode = getSelectedRecalcMode();
+  var startBalInput = document.getElementById('recalc-start-balance').value.trim();
+  var startBal = (mode === 'fixFromInconsistency') ? '__FIX_FROM_INCONSISTENCY__' : startBalInput;
 
   // Konfirmasi
   showConfirm({
