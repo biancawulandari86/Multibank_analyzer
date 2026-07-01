@@ -1050,7 +1050,7 @@ body.mode-hp #btn-hamburger { display: flex !important; }
      ============================================================ -->
 <script>
 // ── KONFIGURASI — isi URL GAS Web App kamu di sini ──
-var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbzsPmqqQ-QSLtlTG5pPPvJoz1NBucMv8oOSoH_JOcZTMXMZDmVq5ZyEM3EGlUEMnlUU/exec';
+var GAS_URL = window.GAS_URL || 'https://script.google.com/macros/s/AKfycbzdC8V_asf_2h7JfNa3Ut7Bs62TpKQPpIntCJFZYH9f3yqD6aV0hdLusaRV_6BOEv8H/exec';
 
 // ── Bridge: gasCall(funcName, args, onSuccess, onFailure) ──
 // Meniru perilaku gasCall('funcName', [], , function(e){ console.error(e); })
@@ -1427,6 +1427,7 @@ function gasCall(funcName, args, onSuccess, onFailure) {
           <button class="btn-sm" id="btn-import-history" onclick="openImportHistoryModal()" style="display:none">📦 Riwayat Import</button>
           <button class="btn-sm" id="btn-input-manual" onclick="openAddTxnModal()" style="display:none">✏ Input Manual</button>
           <button class="btn-sm" id="btn-paste-excel" onclick="openPasteModal()" style="display:none">📋 Paste Excel</button>
+          <button class="btn-sm" id="btn-recalculate" onclick="openRecalculateModal()" style="display:none" title="Hitung ulang saldo semua transaksi — perbaiki selisih desimal dari bug import lama">🔄 Recalculate Saldo</button>
           <button class="btn-sm primary" id="btn-save-gsheet" onclick="saveBankToGSheet()" style="display:none">💾 Simpan ke GSheet</button>
           <button class="btn-sm" onclick="openEditBankModal()">✏ Edit Bank</button>
           <button class="btn-sm danger" onclick="deleteCurrentBank()">🗑 Hapus</button>
@@ -1773,7 +1774,7 @@ function gasCall(funcName, args, onSuccess, onFailure) {
         Transaksi berikut memiliki tanggal <strong style="color:var(--amber)">PEND</strong> (pending/belum settle).<br>
         Pilih tanggal yang sesuai agar transaksi ini bisa tersimpan dengan benar.
         <div style="margin-top:8px;padding:8px 10px;background:var(--accent-glow);border-left:3px solid var(--accent);border-radius:4px;color:var(--text);font-size:11.5px;line-height:1.6">
-          <strong style="color:var(--accent)">🔒 Mode Verifikasi Saldo v4.6:</strong> Setelah pilih tanggal, sistem akan <strong>mengecek konsistensi DB/CR dengan saldo</strong> sebelum simpan ke GSheet. Patokan awal = <strong>saldo terakhir dari transaksi normal</strong> (sisa saldo terakhir dijadikan acuan). Untuk setiap transaksi: <strong>debit → saldo berkurang</strong>, <strong>kredit → saldo bertambah</strong>. Jika saldo aktual cocok dengan arah lawan, sistem <strong>otomatis swap</strong>. Hanya swap jika bukti saldo <strong>decisive</strong> (satu arah match, arah lain tidak match, toleransi 1 rupiah). Backup safety-net juga aktif di back-end (Code.gs saveToSheets).
+          <strong style="color:var(--accent)">🔒 Mode Verifikasi Saldo v4.8:</strong> Setelah pilih tanggal, sistem akan <strong>mengecek konsistensi DB/CR dengan saldo</strong> sebelum simpan ke GSheet. Patokan awal = <strong>saldo terakhir dari transaksi normal</strong> (sisa saldo terakhir dijadikan acuan). Untuk setiap transaksi: <strong>debit → saldo berkurang</strong>, <strong>kredit → saldo bertambah</strong>. Jika saldo aktual cocok dengan arah lawan, sistem <strong>otomatis swap</strong>. Hanya swap jika bukti saldo <strong>decisive</strong> (satu arah match, arah lain tidak match, toleransi 1 rupiah). Backup safety-net juga aktif di back-end (Code.gs saveToSheets). <strong>v4.8 baru:</strong> tombol <strong>"🔄 Recalculate Saldo"</strong> dengan fitur <strong>"🔍 Cek Konsistensi"</strong> untuk deteksi transaksi yang saldo-nya "nyasar" (mis. desimal berubah padahal debit/kredit 0 atau bulat).
         </div>
       </div>
       <!-- Apply semua sekaligus -->
@@ -1793,6 +1794,57 @@ function gasCall(funcName, args, onSuccess, onFailure) {
       <button class="btn-sm" onclick="skipAllPendAndSave()" title="Lewati semua transaksi PEND, tidak disimpan">⏭ Lewati Semua PEND</button>
       <button class="btn-sm" onclick="closePendModal()">Batal</button>
       <button class="btn-sm primary" id="btn-save-pend" onclick="confirmPendAndSave()">✓ Simpan dengan Tanggal Ini</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MODAL: RECALCULATE BALANCES (v4.7) ══ -->
+<div class="modal-backdrop" id="modal-recalculate">
+  <div class="modal modal-lg">
+    <div class="modal-header">
+      <div class="modal-title">🔄 Hitung Ulang & Normalisasi Saldo</div>
+      <div class="modal-close" onclick="closeModal('modal-recalculate')">✕</div>
+    </div>
+    <div class="modal-body" style="padding:0">
+      <div style="padding:14px 20px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--border);line-height:1.7">
+        Fitur ini menghitung ulang <strong>saldo setiap transaksi</strong> berdasarkan saldo awal + debit/kredit yang tersimpan.
+        Berguna untuk memperbaiki <strong>selisih desimal</strong> dari bug import lama (mis. saldo <code>.41</code> seharusnya <code>.40</code>, atau desimal berubah padahal debit/kredit 0/bulat).
+        <div style="margin-top:8px;padding:8px 10px;background:var(--accent-glow);border-left:3px solid var(--accent);border-radius:4px;color:var(--text);font-size:11.5px;line-height:1.6">
+          <strong style="color:var(--accent)">ℹ️ Cara kerja:</strong><br>
+          1. <strong>🔍 Cek Konsistensi</strong> (tombol kiri bawah) — deteksi transaksi yang saldo-nya "nyasar" tanpa recalculate. Cepat.<br>
+          2. <strong>👁️ Preview Perubahan</strong> — sistem tampilkan transaksi tidak konsisten + before/after setelah recalculate.<br>
+          3. <strong>✓ Terapkan Recalculate</strong> — tulis ke GSheet. Saldo akhir = saldo awal + Σ(kredit) - Σ(debit), round 2 desimal.
+        </div>
+      </div>
+
+      <!-- Input saldo awal -->
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border)">
+        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">
+          <strong>Saldo awal (sebelum transaksi pertama):</strong>
+        </label>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <input type="number" step="0.01" id="recalc-start-balance" placeholder="contoh: 80000000 atau kosongkan untuk pakai saldo transaksi pertama"
+                 style="flex:1;min-width:250px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text);font-family:var(--mono);font-size:13px">
+          <button class="btn-sm primary" onclick="doPreviewRecalculate()" style="padding:8px 16px">👁️ Preview Perubahan</button>
+        </div>
+        <div style="margin-top:6px;font-size:11px;color:var(--muted2)">
+          💡 Kosongkan jika ingin pakai saldo transaksi pertama sebagai acuan (transaksi pertama tidak diubah saldonya).
+        </div>
+      </div>
+
+      <!-- Hasil preview -->
+      <div id="recalc-preview-section" style="display:none;padding:14px 20px">
+        <!-- v4.8: Section Konsistensi (ditampilkan pertama) -->
+        <div id="recalc-consistency-section" style="margin-bottom:14px"></div>
+        <div id="recalc-preview-summary" style="padding:10px 12px;background:var(--bg);border-radius:6px;font-size:12px;line-height:1.7;margin-bottom:12px"></div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Contoh perubahan setelah recalculate (maks 20 transaksi pertama yang berubah):</div>
+        <div id="recalc-preview-list" style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:6px"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-sm" onclick="doCheckConsistency()" title="Cek konsistensi saldo tanpa recalculate — cepat">🔍 Cek Konsistensi Saja</button>
+      <button class="btn-sm" onclick="closeModal('modal-recalculate')">Tutup</button>
+      <button class="btn-sm primary" id="btn-apply-recalc" onclick="doApplyRecalculate()" disabled style="opacity:0.5;cursor:not-allowed">✓ Terapkan Recalculate</button>
     </div>
   </div>
 </div>
@@ -2398,6 +2450,9 @@ function showBank(id) {
     // Tampilkan tombol simpan ke GSheet hanya jika di GAS
     var btnSave = document.getElementById('btn-save-gsheet');
     if (btnSave && isGAS) btnSave.style.display = 'inline-block';
+    // v4.7: Tampilkan tombol Recalculate Saldo hanya jika di GAS & ada transaksi
+    var btnRecalc = document.getElementById('btn-recalculate');
+    if (btnRecalc) btnRecalc.style.display = (isGAS && b.mutasi && b.mutasi.transactions && b.mutasi.transactions.length) ? 'inline-block' : 'none';
     // Tampilkan tombol Riwayat Import jika ada batch tercatat
     var btnHist = document.getElementById('btn-import-history');
     if (btnHist) btnHist.style.display = (b.importBatches && b.importBatches.length) ? 'inline-block' : 'none';
@@ -2411,6 +2466,8 @@ function showBank(id) {
     document.getElementById('bank-detail-tabs').style.display = 'none';
     var btnSave = document.getElementById('btn-save-gsheet');
     if (btnSave) btnSave.style.display = 'none';
+    var btnRecalc = document.getElementById('btn-recalculate');
+    if (btnRecalc) btnRecalc.style.display = 'none';
     var btnHist = document.getElementById('btn-import-history');
     if (btnHist) btnHist.style.display = 'none';
   }
@@ -4413,10 +4470,10 @@ function confirmPendAndSave() {
   var nExplicit  = _pendTxns.filter(function(t){ return t.hasExplicitDBCR; }).length;
 
   if (nCorrected > 0) {
-    showToast('✓ v4.6: ' + nCorrected + ' transaksi PEND dikoreksi berdasarkan saldo (DB↔CR). ' +
+    showToast('✓ v4.8: ' + nCorrected + ' transaksi PEND dikoreksi berdasarkan saldo (DB↔CR). ' +
               (nExplicit - nCorrected) + ' lain dipertahankan.', 'success');
   } else {
-    showToast('✓ v4.6: Semua ' + _pendTxns.length + ' transaksi PEND konsisten dengan saldo. Tidak ada koreksi diperlukan.', 'success');
+    showToast('✓ v4.8: Semua ' + _pendTxns.length + ' transaksi PEND konsisten dengan saldo. Tidak ada koreksi diperlukan.', 'success');
   }
 
   // Masukkan transaksi PEND ke transactions dengan tanggal yang dipilih
@@ -4447,6 +4504,318 @@ function confirmPendAndSave() {
   showToast(_pendTxns.length + ' transaksi PEND berhasil dimasukkan.', 'success');
   // Lanjutkan alur upload biasa
   _continueConfirmUpload();
+}
+
+// ============================================================
+// v4.7: RECALCULATE BALANCES — Modal & Logic
+// ============================================================
+var _recalcPendingBank = null; // { name, group } bank yang sedang di-recalculate
+
+function openRecalculateModal(bankId) {
+  var b = bankId ? banks[bankId] : (currentBankId ? banks[currentBankId] : null);
+  if (!b) { showToast('Pilih bank dulu.', 'warn'); return; }
+  _recalcPendingBank = { name: b.name, group: b.group || '' };
+
+  // Reset state
+  document.getElementById('recalc-start-balance').value = '';
+  document.getElementById('recalc-preview-section').style.display = 'none';
+  document.getElementById('recalc-preview-summary').innerHTML = '';
+  document.getElementById('recalc-preview-list').innerHTML = '';
+  var applyBtn = document.getElementById('btn-apply-recalc');
+  applyBtn.disabled = true;
+  applyBtn.style.opacity = '0.5';
+  applyBtn.style.cursor = 'not-allowed';
+
+  // Pre-fill saldo awal dengan saldo dari _Index jika ada
+  if (b.saldo) {
+    document.getElementById('recalc-start-balance').value = b.saldo;
+  }
+
+  openModal('modal-recalculate');
+}
+
+function doPreviewRecalculate() {
+  if (!_recalcPendingBank) { showToast('Bank tidak terpilih.', 'warn'); return; }
+  var startBal = document.getElementById('recalc-start-balance').value.trim();
+  var summaryEl = document.getElementById('recalc-preview-summary');
+  var listEl = document.getElementById('recalc-preview-list');
+  var sectionEl = document.getElementById('recalc-preview-section');
+  var consistEl = document.getElementById('recalc-consistency-section');
+  var applyBtn = document.getElementById('btn-apply-recalc');
+
+  summaryEl.innerHTML = '<em style="color:var(--muted2)">⏳ Memuat preview...</em>';
+  consistEl.innerHTML = '';
+  sectionEl.style.display = 'block';
+  applyBtn.disabled = true;
+  applyBtn.style.opacity = '0.5';
+  applyBtn.style.cursor = 'not-allowed';
+
+  gasCall('previewRecalculate', [_recalcPendingBank.name, _recalcPendingBank.group, startBal],
+    function(res) {
+      if (res && res.error) {
+        summaryEl.innerHTML = '<span style="color:var(--red)">✗ Error: ' + esc(res.error) + '</span>';
+        return;
+      }
+      if (!res || !res.success) {
+        summaryEl.innerHTML = '<span style="color:var(--red)">✗ Gagal memuat preview.</span>';
+        return;
+      }
+
+      // v4.8: Render section konsistensi (tampilkan pertama)
+      renderConsistencySection(consistEl, res);
+
+      // Render summary recalculate
+      var totalRows = res.totalRows || 0;
+      var totalChanged = res.totalChanged || 0;
+      var maxDiff = res.maxDiff || 0;
+      var startBalFmt = fmt(res.startingBalance || 0);
+      var finalBalFmt = fmt(res.finalBalance || 0);
+      var warna = totalChanged > 0 ? 'var(--amber)' : 'var(--green)';
+      var html = '<div style="margin-bottom:8px"><strong>Total transaksi:</strong> ' + totalRows + '</div>';
+      html += '<div style="margin-bottom:8px"><strong>Saldo awal (acuan):</strong> <code style="font-family:var(--mono)">' + startBalFmt + '</code></div>';
+      html += '<div style="margin-bottom:8px"><strong>Saldo akhir (setelah recalculate):</strong> <code style="font-family:var(--mono);color:var(--accent)">' + finalBalFmt + '</code></div>';
+      html += '<div style="margin-bottom:8px;color:' + warna + '"><strong>Transaksi yang akan berubah:</strong> ' + totalChanged + ' dari ' + totalRows + '</div>';
+      if (totalChanged > 0) {
+        html += '<div style="color:var(--amber)"><strong>Selisih maksimal:</strong> ' + fmt(maxDiff) + ' rupiah</div>';
+      } else {
+        html += '<div style="color:var(--green)">✓ Semua saldo sudah konsisten — tidak ada perubahan diperlukan.</div>';
+      }
+      summaryEl.innerHTML = html;
+
+      // Render list before/after
+      if (res.beforeAfter && res.beforeAfter.length > 0) {
+        var listHtml = '<table style="width:100%;font-size:11px;border-collapse:collapse">';
+        listHtml += '<thead><tr style="background:var(--card);text-align:left;position:sticky;top:0">';
+        listHtml += '<th style="padding:6px 8px;border-bottom:1px solid var(--border)">Tanggal</th>';
+        listHtml += '<th style="padding:6px 8px;border-bottom:1px solid var(--border)">Keterangan</th>';
+        listHtml += '<th style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:right">Sebelum</th>';
+        listHtml += '<th style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:right">Sesudah</th>';
+        listHtml += '<th style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:right">Diff</th>';
+        listHtml += '</tr></thead><tbody>';
+        res.beforeAfter.forEach(function(c) {
+          var diffColor = c.diff > 0 ? 'var(--green)' : 'var(--red)';
+          listHtml += '<tr style="border-bottom:1px solid var(--border)">';
+          listHtml += '<td style="padding:5px 8px;font-family:var(--mono);white-space:nowrap">' + esc(c.date) + '</td>';
+          listHtml += '<td style="padding:5px 8px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(c.desc) + '">' + esc(c.desc) + '</td>';
+          listHtml += '<td style="padding:5px 8px;text-align:right;font-family:var(--mono);color:var(--muted)">' + fmt(c.before) + '</td>';
+          listHtml += '<td style="padding:5px 8px;text-align:right;font-family:var(--mono);font-weight:600">' + fmt(c.after) + '</td>';
+          listHtml += '<td style="padding:5px 8px;text-align:right;font-family:var(--mono);color:' + diffColor + '">' + (c.diff > 0 ? '+' : '') + fmt(c.diff) + '</td>';
+          listHtml += '</tr>';
+        });
+        listHtml += '</tbody></table>';
+        listEl.innerHTML = listHtml;
+      } else {
+        listEl.innerHTML = '<div style="padding:14px;text-align:center;color:var(--muted2);font-size:11px">Tidak ada perubahan</div>';
+      }
+
+      // Enable apply button jika ada perubahan
+      if (totalChanged > 0) {
+        applyBtn.disabled = false;
+        applyBtn.style.opacity = '1';
+        applyBtn.style.cursor = 'pointer';
+      }
+    },
+    function(err) {
+      summaryEl.innerHTML = '<span style="color:var(--red)">✗ Gagal: ' + esc(err.message||'error') + '</span>';
+    }
+  );
+}
+
+// v4.8: Render section konsistensi saldo
+function renderConsistencySection(el, res) {
+  var incCount = res.inconsistentCount || 0;
+  var totalDisc = res.totalDiscrepancy || 0;
+  var incList = res.inconsistencies || [];
+
+  if (incCount === 0) {
+    el.innerHTML = '<div style="padding:10px 12px;background:rgba(34,197,94,0.08);border-left:3px solid var(--green);border-radius:4px;font-size:12px;color:var(--green)">' +
+                   '<strong>✓ Konsistensi Saldo: OK</strong> — Semua transaksi konsisten (saldo = prev + kredit - debet).</div>';
+    return;
+  }
+
+  var html = '<div style="padding:10px 12px;background:rgba(245,166,35,0.08);border-left:3px solid var(--amber);border-radius:4px;font-size:12px;line-height:1.6;margin-bottom:10px">';
+  html += '<strong style="color:var(--amber)">⚠ Ditemukan ' + incCount + ' transaksi dengan saldo tidak konsisten</strong><br>';
+  html += '<span style="color:var(--muted)">Total selisih: <strong style="color:var(--amber)">' + fmt(totalDisc) + ' rupiah</strong></span><br>';
+  html += '<span style="color:var(--muted2);font-size:10.5px">Ini adalah transaksi yang saldonya "nyasar" — bekas bug import lama. Recalculate akan memperbaikinya.</span>';
+  html += '</div>';
+
+  if (incList.length > 0) {
+    html += '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Detail transaksi tidak konsisten (maks 30 pertama):</div>';
+    html += '<div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px">';
+    html += '<table style="width:100%;font-size:10.5px;border-collapse:collapse">';
+    html += '<thead><tr style="background:var(--card);text-align:left;position:sticky;top:0">';
+    html += '<th style="padding:5px 6px;border-bottom:1px solid var(--border)">#</th>';
+    html += '<th style="padding:5px 6px;border-bottom:1px solid var(--border)">Tanggal</th>';
+    html += '<th style="padding:5px 6px;border-bottom:1px solid var(--border)">Keterangan</th>';
+    html += '<th style="padding:5px 6px;border-bottom:1px solid var(--border);text-align:right">Saldo Prev</th>';
+    html += '<th style="padding:5px 6px;border-bottom:1px solid var(--border);text-align:right">D/K</th>';
+    html += '<th style="padding:5px 6px;border-bottom:1px solid var(--border);text-align:right">Seharusnya</th>';
+    html += '<th style="padding:5px 6px;border-bottom:1px solid var(--border);text-align:right">Aktual</th>';
+    html += '<th style="padding:5px 6px;border-bottom:1px solid var(--border);text-align:right">Diff</th>';
+    html += '</tr></thead><tbody>';
+    incList.slice(0, 30).forEach(function(c) {
+      var diffColor = c.diff > 0 ? 'var(--green)' : 'var(--red)';
+      var dOrK = c.debit > 0 ? ('D ' + fmt(c.debit)) : (c.credit > 0 ? ('K ' + fmt(c.credit)) : '0');
+      html += '<tr style="border-bottom:1px solid var(--border)">';
+      html += '<td style="padding:4px 6px;font-family:var(--mono);color:var(--muted)">' + c.idx + '</td>';
+      html += '<td style="padding:4px 6px;font-family:var(--mono);white-space:nowrap">' + esc(c.date) + '</td>';
+      html += '<td style="padding:4px 6px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(c.desc) + '">' + esc(c.desc) + '</td>';
+      html += '<td style="padding:4px 6px;text-align:right;font-family:var(--mono);color:var(--muted)">' + fmt(c.prevBalance) + '</td>';
+      html += '<td style="padding:4px 6px;text-align:right;font-family:var(--mono)">' + dOrK + '</td>';
+      html += '<td style="padding:4px 6px;text-align:right;font-family:var(--mono);color:var(--green)">' + fmt(c.expected) + '</td>';
+      html += '<td style="padding:4px 6px;text-align:right;font-family:var(--mono);color:var(--red)">' + fmt(c.actual) + '</td>';
+      html += '<td style="padding:4px 6px;text-align:right;font-family:var(--mono);color:' + diffColor + ';font-weight:600">' + (c.diff > 0 ? '+' : '') + fmt(c.diff) + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    html += '</div>';
+  }
+  el.innerHTML = html;
+}
+
+// v4.8: Cek konsistensi saja (tanpa recalculate)
+function doCheckConsistency() {
+  if (!_recalcPendingBank) { showToast('Bank tidak terpilih.', 'warn'); return; }
+  var summaryEl = document.getElementById('recalc-preview-summary');
+  var listEl = document.getElementById('recalc-preview-list');
+  var sectionEl = document.getElementById('recalc-preview-section');
+  var consistEl = document.getElementById('recalc-consistency-section');
+  var applyBtn = document.getElementById('btn-apply-recalc');
+
+  consistEl.innerHTML = '<em style="color:var(--muted2)">⏳ Mengecek konsistensi...</em>';
+  summaryEl.innerHTML = '';
+  listEl.innerHTML = '';
+  sectionEl.style.display = 'block';
+  applyBtn.disabled = true;
+  applyBtn.style.opacity = '0.5';
+  applyBtn.style.cursor = 'not-allowed';
+
+  gasCall('checkBalanceConsistency', [_recalcPendingBank.name, _recalcPendingBank.group],
+    function(res) {
+      if (res && res.error) {
+        consistEl.innerHTML = '<span style="color:var(--red)">✗ Error: ' + esc(res.error) + '</span>';
+        return;
+      }
+      if (!res || !res.success) {
+        consistEl.innerHTML = '<span style="color:var(--red)">✗ Gagal cek konsistensi.</span>';
+        return;
+      }
+      // Render section konsistensi dengan info lengkap
+      var incCount = res.inconsistentCount || 0;
+      var totalDisc = res.totalDiscrepancy || 0;
+      var incList = res.inconsistencies || [];
+      var firstBal = res.firstBalance || 0;
+      var lastBal = res.lastBalance || 0;
+
+      if (incCount === 0) {
+        consistEl.innerHTML = '<div style="padding:14px 12px;background:rgba(34,197,94,0.08);border-left:3px solid var(--green);border-radius:4px;font-size:13px;color:var(--green)">' +
+                              '<strong>✓ Konsistensi Saldo: OK</strong><br>' +
+                              '<span style="font-size:11px;color:var(--muted)">Semua ' + res.totalRows + ' transaksi konsisten. Saldo awal: ' + fmt(firstBal) + ' | Saldo akhir: ' + fmt(lastBal) + '</span></div>';
+        return;
+      }
+
+      var html = '<div style="padding:12px;background:rgba(245,166,35,0.08);border-left:3px solid var(--amber);border-radius:4px;font-size:13px;line-height:1.7;margin-bottom:10px">';
+      html += '<strong style="color:var(--amber)">⚠ Ditemukan ' + incCount + ' transaksi tidak konsisten</strong><br>';
+      html += '<span style="color:var(--muted);font-size:12px">Total selisih: <strong style="color:var(--amber)">' + fmt(totalDisc) + ' rupiah</strong></span><br>';
+      html += '<span style="color:var(--muted);font-size:12px">Saldo awal: ' + fmt(firstBal) + ' | Saldo akhir: ' + fmt(lastBal) + '</span><br>';
+      html += '<span style="color:var(--muted2);font-size:10.5px;display:block;margin-top:6px">💡 Untuk memperbaiki: input saldo awal di atas lalu klik "👁️ Preview Perubahan", atau langsung klik "✓ Terapkan Recalculate" dengan saldo awal kosong.</span>';
+      html += '</div>';
+
+      if (incList.length > 0) {
+        html += '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Detail transaksi tidak konsisten:</div>';
+        html += '<div style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:6px">';
+        html += '<table style="width:100%;font-size:10.5px;border-collapse:collapse">';
+        html += '<thead><tr style="background:var(--card);text-align:left;position:sticky;top:0">';
+        html += '<th style="padding:5px 6px;border-bottom:1px solid var(--border)">#</th>';
+        html += '<th style="padding:5px 6px;border-bottom:1px solid var(--border)">Tanggal</th>';
+        html += '<th style="padding:5px 6px;border-bottom:1px solid var(--border)">Keterangan</th>';
+        html += '<th style="padding:5px 6px;border-bottom:1px solid var(--border);text-align:right">Saldo Prev</th>';
+        html += '<th style="padding:5px 6px;border-bottom:1px solid var(--border);text-align:right">D/K</th>';
+        html += '<th style="padding:5px 6px;border-bottom:1px solid var(--border);text-align:right">Seharusnya</th>';
+        html += '<th style="padding:5px 6px;border-bottom:1px solid var(--border);text-align:right">Aktual</th>';
+        html += '<th style="padding:5px 6px;border-bottom:1px solid var(--border);text-align:right">Diff</th>';
+        html += '</tr></thead><tbody>';
+        incList.slice(0, 100).forEach(function(c) {
+          var diffColor = c.diff > 0 ? 'var(--green)' : 'var(--red)';
+          var dOrK = c.debit > 0 ? ('D ' + fmt(c.debit)) : (c.credit > 0 ? ('K ' + fmt(c.credit)) : '0');
+          html += '<tr style="border-bottom:1px solid var(--border)">';
+          html += '<td style="padding:4px 6px;font-family:var(--mono);color:var(--muted)">' + c.idx + '</td>';
+          html += '<td style="padding:4px 6px;font-family:var(--mono);white-space:nowrap">' + esc(c.date) + '</td>';
+          html += '<td style="padding:4px 6px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(c.desc) + '">' + esc(c.desc) + '</td>';
+          html += '<td style="padding:4px 6px;text-align:right;font-family:var(--mono);color:var(--muted)">' + fmt(c.prevBalance) + '</td>';
+          html += '<td style="padding:4px 6px;text-align:right;font-family:var(--mono)">' + dOrK + '</td>';
+          html += '<td style="padding:4px 6px;text-align:right;font-family:var(--mono);color:var(--green)">' + fmt(c.expected) + '</td>';
+          html += '<td style="padding:4px 6px;text-align:right;font-family:var(--mono);color:var(--red)">' + fmt(c.actual) + '</td>';
+          html += '<td style="padding:4px 6px;text-align:right;font-family:var(--mono);color:' + diffColor + ';font-weight:600">' + (c.diff > 0 ? '+' : '') + fmt(c.diff) + '</td>';
+          html += '</tr>';
+        });
+        html += '</tbody></table>';
+        html += '</div>';
+      }
+      consistEl.innerHTML = html;
+    },
+    function(err) {
+      consistEl.innerHTML = '<span style="color:var(--red)">✗ Gagal: ' + esc(err.message||'error') + '</span>';
+    }
+  );
+}
+
+function doApplyRecalculate() {
+  if (!_recalcPendingBank) { showToast('Bank tidak terpilih.', 'warn'); return; }
+  var applyBtn = document.getElementById('btn-apply-recalc');
+  if (applyBtn.disabled) return;
+  var startBal = document.getElementById('recalc-start-balance').value.trim();
+
+  // Konfirmasi
+  showConfirm({
+    icon: '🔄',
+    title: 'Konfirmasi Recalculate',
+    msg: 'Yakin ingin menghitung ulang saldo semua transaksi di sheet ini? Saldo lama akan ditimpa dengan hasil perhitungan baru. Catatan, ImportId, dan data lain tetap dipertahankan.',
+    okLabel: 'Ya, Terapkan',
+    okClass: 'primary',
+    onOk: function() {
+      applyBtn.disabled = true;
+      applyBtn.textContent = '⏳ Memproses...';
+      gasCall('recalculateBalances', [_recalcPendingBank.name, _recalcPendingBank.group, startBal, false],
+        function(res) {
+          applyBtn.disabled = false;
+          applyBtn.textContent = '✓ Terapkan Recalculate';
+          if (res && res.error) {
+            showToast('✗ Gagal: ' + res.error, 'error', 6000);
+            return;
+          }
+          if (!res || !res.success) {
+            showToast('✗ Gagal recalculate.', 'error');
+            return;
+          }
+          // Tampilkan hasil
+          var msg = '✓ Berhasil! ' + (res.totalRecalculated||0) + ' transaksi di-recalculate, ' +
+                    (res.totalNormalized||0) + ' dinormalisasi desimal. Selisih max: ' + fmt(res.maxDiff||0);
+          showToast(msg, 'success', 8000);
+          console.log('[v4.7 RECALCULATE] Result:', res);
+
+          // Tutup modal & reload data
+          closeModal('modal-recalculate');
+          if (typeof showBank === 'function' && currentBankId) {
+            showBank(currentBankId);
+          }
+          // Jika ada fungsi reload dari GSheet, panggil juga
+          if (typeof loadBankDataFromGSheet === 'function' && currentBankId) {
+            var b = banks[currentBankId];
+            if (b) {
+              var idx = Object.keys(banks).indexOf(currentBankId);
+              if (idx >= 0) loadBankDataFromGSheet(idx);
+            }
+          }
+        },
+        function(err) {
+          applyBtn.disabled = false;
+          applyBtn.textContent = '✓ Terapkan Recalculate';
+          showToast('✗ Error: ' + (err.message||'koneksi error'), 'error', 6000);
+        }
+      );
+    }
+  });
 }
 
 function _continueConfirmUpload() {
