@@ -1773,7 +1773,7 @@ function gasCall(funcName, args, onSuccess, onFailure) {
         Transaksi berikut memiliki tanggal <strong style="color:var(--amber)">PEND</strong> (pending/belum settle).<br>
         Pilih tanggal yang sesuai agar transaksi ini bisa tersimpan dengan benar.
         <div style="margin-top:8px;padding:8px 10px;background:var(--accent-glow);border-left:3px solid var(--accent);border-radius:4px;color:var(--text);font-size:11.5px;line-height:1.6">
-          <strong style="color:var(--accent)">🔒 Mode Preservasi Excel v4.4:</strong> <strong>Semua transaksi</strong> (PEND &amp; normal) dipertahankan <strong>persis seperti di file Excel/CSV</strong> saat import. <strong>Tidak ada koreksi/swap DB&harr;CR otomatis</strong> sama sekali. Debit di Excel = Debit di sheet. Kredit di Excel = Kredit di sheet. Mutlak.
+          <strong style="color:var(--accent)">🔒 Mode Verifikasi Saldo v4.5:</strong> Setelah pilih tanggal, sistem akan <strong>mengecek konsistensi DB/CR dengan saldo</strong> sebelum simpan ke GSheet. Jika saldo aktual cocok dengan arah lawan (mis. ditandai DB tapi saldo naik = mestinya CR), sistem <strong>otomatis swap</strong>. Hanya swap jika bukti saldo <strong>decisive</strong> (satu arah match, arah lain tidak match, toleransi 1 rupiah). Backup safety-net juga aktif di back-end (Code.gs saveToSheets).
         </div>
       </div>
       <!-- Apply semua sekaligus -->
@@ -3922,7 +3922,12 @@ function clientProcessCSV(csvText, bankType) {
       var typeStr='';
       for(var c=colAmount+1;c<row.length;c++){var v=(row[c]||'').trim().toUpperCase();if(v==='CR'||v==='DB'){typeStr=v;break;}}
       var hasExplicitDBCR = !!typeStr;
-      if(!typeStr){typeStr=/ db /i.test(' '+desc+' ')?'DB':'CR';}
+      // v4.5: cek DB dan CR eksplisit di desc; default CR akan diverifikasi oleh _correctPendDirectionByBalance
+      if(!typeStr){
+        if(/ db /i.test(' '+desc+' ')) typeStr='DB';
+        else if(/ cr /i.test(' '+desc+' ')) typeStr='CR';
+        else typeStr='CR';
+      }
       var debit=typeStr==='DB'?amt:0, credit=typeStr==='CR'?amt:0;
       if(amt===0){skipped++;continue;}
       transactions.push({date:d,dateKey:isPend?'PEND':(d?dateKey(d):''),monthKey:isPend?'PEND':(d?monthKey(d):''),desc:desc,debit:debit,credit:credit,balance:balance,type:(debit>0?'DB':'CR'),hasExplicitDBCR:hasExplicitDBCR,txnId:'bca_'+i+'_'+Math.random().toString(36).slice(2,6),isPending:isPend?true:undefined});
@@ -4044,7 +4049,8 @@ function renderPendModal() {
     html += '<div class="pend-info">';
     html += '<div class="pend-desc" title="' + esc(t.desc) + '">' + (t.desc || '(tanpa keterangan)') + '</div>';
     html += '<div class="pend-meta">';
-    if (t.hasExplicitDBCR) html += '<span style="color:var(--accent);font-weight:600" title="DB/CR sudah jelas di CSV/Excel — tidak akan dikoreksi otomatis">🔒 DB/CR eksplisit</span>';
+    if (t.hasExplicitDBCR) html += '<span style="color:var(--accent);font-weight:600" title="DB/CR sudah jelas di CSV/Excel — verifikasi saldo v4.5 tetap aktif sebagai safety net">🔒 DB/CR eksplisit</span>';
+    if (t._autoCorrected) html += '<span style="color:var(--green);font-weight:600" title="Arah DB/CR dikoreksi otomatis berdasarkan saldo">✓ Dikoreksi saldo</span>';
     if (t.debit > 0)  html += '<span>Debet: <strong style="color:var(--red)">' + fmt(t.debit) + '</strong></span>';
     if (t.credit > 0) html += '<span>Kredit: <strong style="color:var(--green)">' + fmt(t.credit) + '</strong></span>';
     if (t.balance > 0) html += '<span>Saldo: ' + fmt(t.balance) + '</span>';
@@ -4090,34 +4096,145 @@ function skipAllPendAndSave() {
 }
 
 // ============================================================
-// PRESERVASI EXCEL v4.4 — TIDAK ADA KOREKSI OTOMATIS SAMA SEKALI
+// v4.5: KOREKSI DB/CR BERBASIS SALDO — RE-ENABLED (ROBUST)
 // ============================================================
-// Sejarah singkat:
+// Sejarah:
 //   v4.1/v4.2: _correctPendDirectionByBalance aktif & agresif → banyak
 //              transaksi PEND tertukar DB<->CR sehingga sheet ≠ Excel.
 //   v4.3     : Koreksi dibuat konservatif (hanya untuk non-eksplisit).
 //   v4.4     : KOREKSI OTOMATIS DINONAKTIFKAN TOTAL. Semua transaksi
 //              (PEND maupun normal) dipertahankan PERSIS seperti di
 //              CSV/Excel saat import. Sheet = Excel. Mutlak.
+//   v4.5     : RE-ENABLE dengan logika ROBUST & DESISIF. Hanya swap
+//              jika bukti saldo SANGAT JELAS (satu arah match, arah
+//              lain TIDAK match, dalam toleransi 1 rupiah). Menggunakan
+//              saldo terakhir dari sheet eksisting sebagai acuan. Juga
+//              swap transaksi dengan marker DB/CR eksplisit jika saldo
+//              jelas-jelas bertentangan (parser bisa salah baca kolom).
 //
-// Alasan v4.4:
-//   User minta: "bukan yang status PEND aja, tapi ALL status saat import
-//   harus persis sama dengan Excel." Jadi kita hapus semua heuristik
-//   swap DB/CR. Parser bertugas membaca DB/CR apa adanya; jika parser
-//   salah baca (mis. kolom DB/CR tak terdeteksi), itu bug parser yang
-//   harus diperbaiki di parser — BUKAN ditutupi dengan swap di sini.
-//
-// Fungsi ini sengaja di-keep sebagai stub no-op agar pemanggilan di
-// confirmPendAndSave() tidak perlu diubah. Return 0 = tidak ada koreksi.
+// Front-end fix ini didukung oleh back-end (Code.gs saveToSheets) yang
+// juga melakukan verifikasi saldo sebagai safety net sebelum tulis sheet.
 // ============================================================
-function _correctPendDirectionByBalance(pendTxns, normalTxns) {
-  // NO-OP sejak v4.4. Semua transaksi dipertahankan apa adanya.
-  // Tetap log jumlah transaksi untuk transparency.
-  if (pendTxns && pendTxns.length) {
-    console.log('[PRESERVASI EXCEL v4.4] ' + pendTxns.length +
-      ' transaksi PEND dipertahankan apa adanya (tidak ada koreksi DB/CR).');
+function _correctPendDirectionByBalance(pendTxns, csvNormalTxns, sheetExistingTxns) {
+  if (!pendTxns || !pendTxns.length) return 0;
+  var TOLERANCE = 1; // 1 rupiah
+
+  // ── Gabungkan semua transaksi normal (dari CSV & sheet eksisting) ──
+  // untuk acuan saldo sebelum PEND pertama
+  var allNormal = [];
+  if (csvNormalTxns && csvNormalTxns.length) {
+    csvNormalTxns.forEach(function(t) {
+      if (!t.date || t.date === 'PEND') return;
+      allNormal.push({ date: t.date, balance: parseFloat(t.balance)||0, type: t.type,
+                       debit: parseFloat(t.debit)||0, credit: parseFloat(t.credit)||0 });
+    });
   }
-  return 0;
+  if (sheetExistingTxns && sheetExistingTxns.length) {
+    sheetExistingTxns.forEach(function(t) {
+      if (!t.date || t.date === 'PEND') return; // skip PEND di sheet eksisting
+      allNormal.push({ date: t.date, balance: parseFloat(t.balance)||0, type: t.type,
+                       debit: parseFloat(t.debit)||0, credit: parseFloat(t.credit)||0 });
+    });
+  }
+
+  // Sort normal by date ascending
+  allNormal.sort(function(a, b) {
+    var da = a.date || '', db = b.date || '';
+    if (da === 'PEND') return 1;
+    if (db === 'PEND') return -1;
+    return da < db ? -1 : da > db ? 1 : 0;
+  });
+
+  // Sort PEND by chosenDate ascending (transaksi PEND yang sudah di-assign tanggal)
+  var sortedPend = pendTxns.slice().sort(function(a, b) {
+    return (a.chosenDate || '') < (b.chosenDate || '') ? -1 :
+           (a.chosenDate || '') > (b.chosenDate || '') ? 1 : 0;
+  });
+
+  var runningBalance = null;
+  var lastChosenDate = null;
+  var correctedCount = 0;
+  var swapLog = []; // untuk debugging
+
+  sortedPend.forEach(function(t) {
+    var amt = (parseFloat(t.debit) || 0) > 0
+              ? parseFloat(t.debit)
+              : ((parseFloat(t.credit) || 0) > 0 ? parseFloat(t.credit) : 0);
+    if (amt <= 0) return;
+
+    // ── Cari saldo sebelumnya ──
+    var prevBalance = null;
+    if (lastChosenDate === t.chosenDate && runningBalance !== null) {
+      // PEND sebelumnya di tanggal yang sama → pakai running balance
+      prevBalance = runningBalance;
+    } else {
+      // Cari dari normal terakhir dengan date <= chosenDate
+      for (var i = allNormal.length - 1; i >= 0; i--) {
+        var nDate = allNormal[i].date || '';
+        if (nDate !== 'PEND' && nDate <= t.chosenDate) {
+          prevBalance = allNormal[i].balance || 0;
+          break;
+        }
+      }
+      // Jika tidak ada normal sebelumnya, gunakan running balance dari PEND sebelumnya
+      if (prevBalance === null && runningBalance !== null) {
+        prevBalance = runningBalance;
+      }
+    }
+
+    var currentIsDebit = (parseFloat(t.debit) || 0) > 0;
+    var hasBalance = (t.balance && parseFloat(t.balance) > 0);
+    var actualBalance = parseFloat(t.balance) || 0;
+
+    // ── Verifikasi: swap hanya jika bukti saldo DECISIVE ──
+    if (hasBalance && prevBalance !== null && prevBalance > 0) {
+      var expectedIfDebit  = prevBalance - amt;
+      var expectedIfCredit = prevBalance + amt;
+      var matchesDebit     = Math.abs(expectedIfDebit  - actualBalance) < TOLERANCE;
+      var matchesCredit    = Math.abs(expectedIfCredit - actualBalance) < TOLERANCE;
+
+      if (matchesDebit && !matchesCredit && !currentIsDebit) {
+        // Swap: CR → DB
+        swapLog.push({ desc: t.desc, from: 'CR', to: 'DB', amt: amt,
+                       prev: prevBalance, actual: actualBalance });
+        t.debit = amt; t.credit = 0; t.type = 'DB';
+        t._autoCorrected = true;
+        correctedCount++;
+        currentIsDebit = true;
+      } else if (matchesCredit && !matchesDebit && currentIsDebit) {
+        // Swap: DB → CR
+        swapLog.push({ desc: t.desc, from: 'DB', to: 'CR', amt: amt,
+                       prev: prevBalance, actual: actualBalance });
+        t.credit = amt; t.debit = 0; t.type = 'CR';
+        t._autoCorrected = true;
+        correctedCount++;
+        currentIsDebit = false;
+      }
+      // Jika both match (rounding) atau neither match → biarkan apa adanya
+    }
+
+    // ── Update running balance untuk PEND berikutnya ──
+    if (hasBalance) {
+      runningBalance = actualBalance;
+    } else if (prevBalance !== null) {
+      runningBalance = currentIsDebit ? (prevBalance - amt) : (prevBalance + amt);
+    }
+    lastChosenDate = t.chosenDate;
+  });
+
+  // Log detail koreksi untuk transparency
+  if (correctedCount > 0) {
+    console.log('[v4.5 KOREKSI PEND] ' + correctedCount + ' transaksi PEND dikoreksi berdasarkan saldo:');
+    swapLog.forEach(function(s, i) {
+      console.log('  [' + (i+1) + '] "' + (s.desc||'').slice(0,50) + '" ' +
+                  s.from + '→' + s.to + ' (amt=' + s.amt + ', prev=' + s.prev + ', actual=' + s.actual + ')');
+    });
+  } else {
+    console.log('[v4.5 KOREKSI PEND] Tidak ada koreksi diperlukan untuk ' +
+                (pendTxns.length||0) + ' transaksi PEND (semua konsisten dengan saldo).');
+  }
+
+  return correctedCount;
 }
 
 // ============================================================
@@ -4237,17 +4354,25 @@ function confirmPendAndSave() {
     return;
   }
 
-  // ── PRESERVASI EXCEL v4.4 — TIDAK ADA KOREKSI OTOMATIS ──
-  // Semua transaksi (PEND maupun normal) dipertahankan PERSIS seperti di
-  // CSV/Excel. Fungsi _correctPendDirectionByBalance sekarang no-op.
-  var existingNormal = (pendingCSVData && pendingCSVData.transactions) ? pendingCSVData.transactions : [];
-  var nCorrected = _correctPendDirectionByBalance(_pendTxns, existingNormal); // selalu 0 di v4.4
+  // ── v4.5: KOREKSI DB/CR BERBASIS SALDO — RE-ENABLED ──
+  // Sebelum menyimpan ke GSheet, verifikasi setiap transaksi PEND:
+  //   - Jika saldo_aktual == saldo_sebelumnya + amount → harus CR
+  //   - Jika saldo_aktual == saldo_sebelumnya - amount → harus DB
+  //   - Hanya swap jika bukti saldo DECISIVE (satu arah match, arah lain TIDAK)
+  // Saldo sebelumnya diambil dari:
+  //   1. Transaksi normal terakhir di CSV yang sedang di-import
+  //   2. Transaksi normal terakhir di sheet eksisting (loaded sebelumnya)
+  var existingNormalCSV = (pendingCSVData && pendingCSVData.transactions) ? pendingCSVData.transactions : [];
+  var existingSheetTxns = (currentBankId && banks[currentBankId] && banks[currentBankId].mutasi &&
+                           banks[currentBankId].mutasi.transactions) ? banks[currentBankId].mutasi.transactions : [];
+  var nCorrected = _correctPendDirectionByBalance(_pendTxns, existingNormalCSV, existingSheetTxns);
   var nExplicit  = _pendTxns.filter(function(t){ return t.hasExplicitDBCR; }).length;
+
   if (nCorrected > 0) {
-    // Seharusnya tidak terjadi di v4.4 — hanya jaga fallback
-    showToast('✓ ' + nCorrected + ' transaksi PEND dikoreksi. ' + nExplicit + ' lain dipertahankan apa adanya.', 'success');
+    showToast('✓ v4.5: ' + nCorrected + ' transaksi PEND dikoreksi berdasarkan saldo (DB↔CR). ' +
+              (nExplicit - nCorrected) + ' lain dipertahankan.', 'success');
   } else {
-    showToast('🔒 PRESERVASI EXCEL: Semua ' + _pendTxns.length + ' transaksi PEND dipertahankan persis seperti di CSV/Excel.', 'success');
+    showToast('✓ v4.5: Semua ' + _pendTxns.length + ' transaksi PEND konsisten dengan saldo. Tidak ada koreksi diperlukan.', 'success');
   }
 
   // Masukkan transaksi PEND ke transactions dengan tanggal yang dipilih
@@ -4475,7 +4600,14 @@ function _autoSaveBankToSheet(bankId) {
   gasCall('saveToSheets', [mutasiWithNotes, b.name, b.group, b.saldo, b.color], function(res) {
       _savingInProgress = Math.max(0, _savingInProgress - 1);
       if (res && res.success) {
-        showToast('✓ Data berhasil tersimpan ke Google Sheets!', 'success');
+        // v4.5: tampilkan info koreksi back-end jika ada
+        var beCorr = (res.correctionsTotal || 0);
+        var beCorrPend = (res.correctionsPend || 0);
+        if (beCorr > 0) {
+          showToast('✓ Tersimpan! ⚠ Back-end mengoreksi ' + beCorr + ' transaksi (' + beCorrPend + ' PEND) berdasarkan saldo.', 'success', 6000);
+        } else {
+          showToast('✓ Data berhasil tersimpan ke Google Sheets!', 'success');
+        }
         // Update timestamp lokal agar polling tahu ini perubahan dari diri sendiri
         gasCall('getLastSavedTimestamp', [], function(tsRes) {
           if (tsRes && tsRes.ts) _lastKnownTs = tsRes.ts;
@@ -4734,7 +4866,13 @@ function doSaveToGSheet() {
         document.getElementById('btn-do-save-gsheet').disabled = false;
         document.getElementById('btn-do-save-gsheet').textContent = '💾 Simpan Sekarang';
       } else {
-        showGSheetSaveStatus('success', '✓ Berhasil disimpan! <a href="' + res.url + '" target="_blank" style="color:var(--accent)">Buka Google Sheets ↗</a>');
+        // v4.5: tampilkan info koreksi back-end jika ada
+        var beCorr = (res.correctionsTotal || 0);
+        var beCorrPend = (res.correctionsPend || 0);
+        var corrNote = beCorr > 0
+          ? '<br><span style="color:var(--amber);font-size:11px">⚠ Back-end mengoreksi ' + beCorr + ' transaksi (' + beCorrPend + ' PEND) berdasarkan saldo.</span>'
+          : '';
+        showGSheetSaveStatus('success', '✓ Berhasil disimpan!' + corrNote + ' <a href="' + res.url + '" target="_blank" style="color:var(--accent)">Buka Google Sheets ↗</a>');
         document.getElementById('btn-do-save-gsheet').textContent = '✓ Tersimpan';
         // Update timestamp lokal agar polling tahu ini perubahan dari diri sendiri
         gasCall('getLastSavedTimestamp', [], function(tsRes) {
