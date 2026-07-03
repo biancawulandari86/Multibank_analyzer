@@ -4478,25 +4478,33 @@ function confirmPendAndSave() {
     return;
   }
 
-  // ── v4.5: KOREKSI DB/CR BERBASIS SALDO — RE-ENABLED ──
-  // Sebelum menyimpan ke GSheet, verifikasi setiap transaksi PEND:
-  //   - Jika saldo_aktual == saldo_sebelumnya + amount → harus CR
-  //   - Jika saldo_aktual == saldo_sebelumnya - amount → harus DB
-  //   - Hanya swap jika bukti saldo DECISIVE (satu arah match, arah lain TIDAK)
-  // Saldo sebelumnya diambil dari:
-  //   1. Transaksi normal terakhir di CSV yang sedang di-import
-  //   2. Transaksi normal terakhir di sheet eksisting (loaded sebelumnya)
+  // ── v5.0: KOREKSI DB/CR PEND BERBASIS SALDO — DINONAKTIFKAN TOTAL ──
+  // Penyebab bug "debit dibaca kredit" pada beberapa transaksi PEND:
+  // _correctPendDirectionByBalance() sering SWAP transaksi PEND yang sudah
+  // punya marker DB/CR eksplisit dari CSV/Excel. Setelah swap, data yang
+  // tersimpan di sheet berbeda dari CSV asli → saat load balik, transaksi
+  // debit muncul sebagai kredit dan sebaliknya.
+  //
+  // SOLUSI v5.0: Jangan panggil _correctPendDirectionByBalance. Semua
+  // transaksi PEND dipertahankan apa adanya seperti yang di-parse dari
+  // CSV/Excel. Hanya tanggal yang di-assign oleh user (chosenDate).
+  //
+  // Kode lama dipertahankan di bawah (dibungkus if(false)) untuk referensi.
   var existingNormalCSV = (pendingCSVData && pendingCSVData.transactions) ? pendingCSVData.transactions : [];
   var existingSheetTxns = (currentBankId && banks[currentBankId] && banks[currentBankId].mutasi &&
                            banks[currentBankId].mutasi.transactions) ? banks[currentBankId].mutasi.transactions : [];
-  var nCorrected = _correctPendDirectionByBalance(_pendTxns, existingNormalCSV, existingSheetTxns);
+  var nCorrected = 0;  // v5.0: selalu 0 — koreksi dinonaktifkan
   var nExplicit  = _pendTxns.filter(function(t){ return t.hasExplicitDBCR; }).length;
 
+  if (false) {  // ── v5.0: DISABLED — lihat komentar di atas ──
+    nCorrected = _correctPendDirectionByBalance(_pendTxns, existingNormalCSV, existingSheetTxns);
+  }
+
   if (nCorrected > 0) {
-    showToast('✓ v4.9: ' + nCorrected + ' transaksi PEND dikoreksi berdasarkan saldo (DB↔CR). ' +
+    showToast('✓ v5.0: ' + nCorrected + ' transaksi PEND dikoreksi berdasarkan saldo (DB↔CR). ' +
               (nExplicit - nCorrected) + ' lain dipertahankan.', 'success');
   } else {
-    showToast('✓ v4.9: Semua ' + _pendTxns.length + ' transaksi PEND konsisten dengan saldo. Tidak ada koreksi diperlukan.', 'success');
+    showToast('✓ v5.0: Semua ' + _pendTxns.length + ' transaksi PEND dipertahankan apa adanya (koreksi saldo dinonaktifkan).', 'success');
   }
 
   // Masukkan transaksi PEND ke transactions dengan tanggal yang dipilih
